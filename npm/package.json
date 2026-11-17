@@ -2,7 +2,7 @@
   "name": "agentbox",
   "version": "0.1.0",
   "description": "Local flight recorder, safety guard, and step-by-step undo for AI coding agents",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "bin": {
     "abox": "./bin/abox.js",
     "agentbox": "./bin/abox.js"

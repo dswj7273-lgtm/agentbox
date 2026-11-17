@@ -3,7 +3,7 @@ name = "agentbox"
 version = "0.1.0"
 edition = "2021"
 description = "Cross-agent local blackbox: record every step, snapshot filesystem including bash changes, and undo any step."
-license = "MIT"
+license = "Apache-2.0"
 
 [[bin]]
 name = "abox"
