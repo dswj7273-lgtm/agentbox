@@ -1,0 +1,5 @@
+/target/
+*.abox-backup.*
+*.abox-tmp
+.DS_Store
+.playwright-mcp/
