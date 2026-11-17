@@ -75,6 +75,9 @@ enum Commands {
         /// Output JSON array instead of table
         #[arg(long)]
         json: bool,
+        /// Follow and stream newly recorded steps in real time
+        #[arg(short = 'f', long)]
+        follow: bool,
     },
     /// Show detailed metadata and changed files for a step
     Show {
@@ -247,7 +250,8 @@ fn main() -> Result<()> {
             file,
             limit,
             json,
-        } => commands::cmd_log(all, agent, since, file, limit, json),
+            follow,
+        } => commands::cmd_log(all, agent, since, file, limit, json, follow),
         Commands::Show { step, json } => commands::cmd_show(step, json),
         Commands::Diff { target, patch } => commands::cmd_diff(&target, patch),
         Commands::Undo {

@@ -296,12 +296,46 @@ const UI_HTML: &str = r#"<!doctype html>
   </div>
 </header>
 <main>
-  <div class="list" id="stepList"></div>
+  <div class="list">
+    <div id="checkpointBar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px"></div>
+    <div id="stepList" style="display:flex;flex-direction:column;gap:8px"></div>
+  </div>
   <div class="detail" id="detailPane"><p style="color:var(--muted)">Select a step to inspect its diff and undo.</p></div>
 </main>
 <script>
 let selectedId = null;
+async function loadCheckpoints() {
+  const res = await fetch('/api/checkpoints');
+  const data = await res.json();
+  const bar = document.getElementById('checkpointBar');
+  bar.innerHTML = '';
+  for (const cp of (data.checkpoints || [])) {
+    const btn = document.createElement('button');
+    btn.style.fontSize = '11px';
+    btn.style.padding = '3px 8px';
+    btn.textContent = `⚑ ${cp.name} (${cp.tree_hash.slice(0,6)})`;
+    btn.title = 'Click to restore workspace to this checkpoint';
+    btn.onclick = () => undoTag(cp.name);
+    bar.appendChild(btn);
+  }
+}
+async function undoTag(tag) {
+  if (!confirm(`Restore workspace to checkpoint "${tag}"?`)) return;
+  const res = await fetch('/api/undo', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({tag, force:false}) });
+  const out = await res.json();
+  if (out.status === 'Conflict') {
+    if (confirm('Manual edits detected outside AgentBox:\\n' + out.conflict_files.map(x=>x[1]+' '+x[0]).join('\\n') + '\\n\\nForce overwrite?')) {
+      const fRes = await fetch('/api/undo', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({tag, force:true}) });
+      const fOut = await fRes.json();
+      alert('Undo status: ' + fOut.status);
+    }
+  } else {
+    alert('Undo status: ' + out.status + (out.restored_files ? ` (${out.restored_files} files restored)` : ''));
+  }
+  loadSteps();
+}
 async function loadSteps() {
+  loadCheckpoints();
   const all = document.getElementById('allSessions').checked ? '1' : '0';
   const agent = document.getElementById('agentFilter').value;
   const res = await fetch(`/api/steps?all=${all}&agent=${encodeURIComponent(agent)}`);
@@ -375,7 +409,7 @@ async function saveCheckpoint() {
   if (!name || !name.trim()) return;
   const res = await fetch('/api/checkpoint', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name: name.trim()}) });
   const out = await res.json();
-  if (out.ok) alert(`Saved checkpoint "${out.name}" (${out.tree_hash.slice(0,8)})`);
+  if (out.ok) { alert(`Saved checkpoint "${out.name}" (${out.tree_hash.slice(0,8)})`); loadCheckpoints(); }
   else alert('Failed: ' + (out.error || 'unknown error'));
 }
 document.getElementById('agentFilter').onchange = loadSteps;

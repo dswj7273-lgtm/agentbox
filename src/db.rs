@@ -560,6 +560,27 @@ impl Database {
         Ok(out)
     }
 
+    pub fn query_steps_after_id(&self, project: &str, after_id: i64) -> Result<Vec<StepRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT s.id, s.session_id, s.seq, s.agent, s.tool, s.input_summary, s.input_json,
+                   s.pre_tree, s.post_tree, s.files_changed, s.guard_decision, s.guard_rule,
+                   s.exit_status, s.duration_ms, s.started_at, s.tokens, s.cost_usd,
+                   s.is_undo, s.concurrent_overlap
+            FROM steps s
+            JOIN sessions sess ON sess.id = s.session_id
+            WHERE sess.project = ?1 AND s.id > ?2
+            ORDER BY s.id ASC
+            "#,
+        )?;
+        let rows = stmt.query_map(params![project, after_id], StepRecord::from_row)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     pub fn get_step(&self, step_id: i64) -> Result<Option<StepRecord>> {
         let res = self
             .conn

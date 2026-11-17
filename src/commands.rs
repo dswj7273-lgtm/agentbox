@@ -132,6 +132,7 @@ pub fn cmd_log(
     file: Option<String>,
     limit: usize,
     json_out: bool,
+    follow: bool,
 ) -> Result<()> {
     let paths = AgentBoxPaths::resolve()?;
     if !paths.db_path().exists() {
@@ -152,7 +153,7 @@ pub fn cmd_log(
     let filter = LogFilter {
         project: Some(project_str.clone()),
         all_sessions,
-        agent,
+        agent: agent.clone(),
         since_ts,
         file_path: file,
         limit,
@@ -163,7 +164,7 @@ pub fn cmd_log(
         println!("{}", serde_json::to_string_pretty(&steps)?);
         return Ok(());
     }
-    if steps.is_empty() {
+    if steps.is_empty() && !follow {
         println!("No recorded steps for {}.", project_root.display());
         return Ok(());
     }
@@ -174,52 +175,29 @@ pub fn cmd_log(
     );
 
     let mut total_files = 0i64;
+    let mut last_id = 0i64;
     for s in &steps {
-        let time_str = Local
-            .timestamp_opt(s.started_at, 0)
-            .single()
-            .map(|dt| dt.format("%H:%M:%S").to_string())
-            .unwrap_or_else(|| "--:--:--".to_string());
+        println!("{}", format_step_line(s));
+        total_files += s.files_changed;
+        last_id = last_id.max(s.id);
+    }
 
-        let mut summary = s.input_summary.clone();
-        if s.concurrent_overlap {
-            summary.push_str(" [concurrent]");
-        }
-        let summary_col = pad_or_truncate(&summary, 34);
-
-        let status = match s.guard_decision.as_deref() {
-            Some("deny") => "DENIED".to_string(),
-            Some("ask") => "ASKED".to_string(),
-            _ => match s.exit_status {
-                Some(0) | None => {
-                    if s.is_undo {
-                        "UNDO".to_string()
-                    } else {
-                        "OK".to_string()
+    if follow {
+        println!("--- following new steps for {} (Ctrl+C to stop) ---", project_root.display());
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let new_steps = db.query_steps_after_id(&project_str, last_id)?;
+            for s in &new_steps {
+                if let Some(ref ag) = agent {
+                    if &s.agent != ag {
+                        last_id = last_id.max(s.id);
+                        continue;
                     }
                 }
-                Some(code) => format!("EXIT {}", code),
-            },
-        };
-
-        let cost_col = if s.cost_usd > 0.0001 {
-            format!("${:.2}", s.cost_usd)
-        } else {
-            "-".to_string()
-        };
-
-        total_files += s.files_changed;
-        println!(
-            " {:<4} {:<8} {:<7} {:<8} {} {:>5}  {:<7} {:>6}",
-            s.id,
-            time_str,
-            pad_or_truncate(&s.agent, 7),
-            pad_or_truncate(&s.tool, 8),
-            summary_col,
-            s.files_changed,
-            status,
-            cost_col
-        );
+                println!("{}", format_step_line(s));
+                last_id = last_id.max(s.id);
+            }
+        }
     }
 
     if let Some(sess) = db.latest_session_for_project(&project_str)? {
@@ -236,6 +214,53 @@ pub fn cmd_log(
     }
 
     Ok(())
+}
+
+fn format_step_line(s: &crate::db::StepRecord) -> String {
+    let time_str = Local
+        .timestamp_opt(s.started_at, 0)
+        .single()
+        .map(|dt| dt.format("%H:%M:%S").to_string())
+        .unwrap_or_else(|| "--:--:--".to_string());
+
+    let mut summary = s.input_summary.clone();
+    if s.concurrent_overlap {
+        summary.push_str(" [concurrent]");
+    }
+    let summary_col = pad_or_truncate(&summary, 34);
+
+    let status = match s.guard_decision.as_deref() {
+        Some("deny") => "DENIED".to_string(),
+        Some("ask") => "ASKED".to_string(),
+        _ => match s.exit_status {
+            Some(0) | None => {
+                if s.is_undo {
+                    "UNDO".to_string()
+                } else {
+                    "OK".to_string()
+                }
+            }
+            Some(code) => format!("EXIT {}", code),
+        },
+    };
+
+    let cost_col = if s.cost_usd > 0.0001 {
+        format!("${:.2}", s.cost_usd)
+    } else {
+        "-".to_string()
+    };
+
+    format!(
+        " {:<4} {:<8} {:<7} {:<8} {} {:>5}  {:<7} {:>6}",
+        s.id,
+        time_str,
+        pad_or_truncate(&s.agent, 7),
+        pad_or_truncate(&s.tool, 8),
+        summary_col,
+        s.files_changed,
+        status,
+        cost_col
+    )
 }
 
 pub fn cmd_show(step_id: i64, json_out: bool) -> Result<()> {
@@ -1044,6 +1069,22 @@ pub fn cmd_doctor() -> Result<()> {
         }
     } else {
         println!("Error log:    ✔ 0 errors");
+    }
+
+    // Validate optional YAML configs
+    for (label, path) in [
+        ("Global policy", paths.global_policy_path()),
+        ("Project policy", project_root.join(".agentbox/policy.yaml")),
+    ] {
+        if path.exists() {
+            match std::fs::read_to_string(&path)
+                .map_err(anyhow::Error::from)
+                .and_then(|s| serde_yaml::from_str::<crate::guard::PolicyFile>(&s).map_err(anyhow::Error::from))
+            {
+                Ok(p) => println!("Config {}: ✔ valid ({} rules)", label, p.rules.len()),
+                Err(e) => println!("Config {}: ✘ invalid YAML: {}", label, e),
+            }
+        }
     }
     Ok(())
 }
