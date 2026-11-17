@@ -1,4 +1,7 @@
 use crate::adapter::claude::{parse_claude_transcript, ClaudeAdapter};
+use crate::adapter::codex::{parse_codex_transcript, CodexAdapter};
+use crate::adapter::gemini::{parse_gemini_transcript, GeminiAdapter};
+use crate::adapter::TranscriptMetrics;
 use crate::guard::GuardEngine;
 use anyhow::Result;
 use serde::Serialize;
@@ -9,6 +12,7 @@ use walkdir::WalkDir;
 #[derive(Debug, Serialize)]
 pub struct SessionCostEntry {
     pub session_id: String,
+    pub agent: String,
     pub project: String,
     pub model: String,
     pub shell_commands: usize,
@@ -22,6 +26,7 @@ pub struct AuditReport {
     pub days: u64,
     pub files_scanned: usize,
     pub sessions_count: usize,
+    pub agents_found: Vec<String>,
     pub total_shell_commands: usize,
     pub high_risk_commands: usize,
     pub unique_edited_files: usize,
@@ -39,30 +44,53 @@ pub fn generate_report(
     json_out: bool,
     html_path: Option<&Path>,
 ) -> Result<()> {
-    let scan_root = if let Some(d) = custom_dir {
-        d.to_path_buf()
-    } else {
-        ClaudeAdapter::claude_home()
-            .map(|h| h.join("projects"))
-            .unwrap_or_else(|| PathBuf::from(".claude/projects"))
-    };
+    let cutoff_ts = chrono::Utc::now().timestamp() - (days as i64 * 86400);
+    let mut sources: Vec<(&'static str, PathBuf)> = Vec::new();
 
-    if !scan_root.exists() {
+    if let Some(d) = custom_dir {
+        sources.push(("claude", d.to_path_buf()));
+    } else {
+        if let Some(ch) = ClaudeAdapter::claude_home() {
+            let p = ch.join("projects");
+            if p.exists() {
+                sources.push(("claude", p));
+            }
+        }
+        if let Some(xh) = CodexAdapter::codex_home() {
+            for sub in ["sessions", "rollouts"] {
+                let p = xh.join(sub);
+                if p.exists() {
+                    sources.push(("codex", p));
+                }
+            }
+        }
+        if let Some(gh) = GeminiAdapter::gemini_home() {
+            let p = gh.join("tmp");
+            if p.exists() {
+                sources.push(("gemini", p));
+            }
+        }
+    }
+
+    if sources.is_empty() {
         println!(
-            "No Claude Code session logs found at {}. Run Claude Code first or pass --dir.",
-            scan_root.display()
+            "No local agent session logs found (~/.claude/projects, ~/.codex/sessions, ~/.gemini/tmp). Pass --dir to specify a log directory."
         );
         return Ok(());
     }
 
-    let cutoff_ts = chrono::Utc::now().timestamp() - (days as i64 * 86400);
     let guard = GuardEngine::load(None, None);
+    let mut log_files: Vec<(&'static str, PathBuf)> = Vec::new();
 
-    let mut jsonl_files = Vec::new();
-    for entry in WalkDir::new(&scan_root).into_iter().flatten() {
-        if entry.file_type().is_file()
-            && entry.path().extension().and_then(|e| e.to_str()) == Some("jsonl")
-        {
+    for (agent_kind, scan_root) in &sources {
+        for entry in WalkDir::new(scan_root).into_iter().flatten() {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let ext = entry.path().extension().and_then(|e| e.to_str());
+            if ext != Some("jsonl") {
+                continue;
+            }
             if let Ok(meta) = entry.metadata() {
                 if let Ok(modified) = meta.modified() {
                     if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
@@ -72,12 +100,13 @@ pub fn generate_report(
                     }
                 }
             }
-            jsonl_files.push(entry.path().to_path_buf());
+            log_files.push((*agent_kind, entry.path().to_path_buf()));
         }
     }
 
     let mut sessions_map: HashMap<String, SessionCostEntry> = HashMap::new();
     let mut edited_files_all: HashSet<String> = HashSet::new();
+    let mut agents_set: HashSet<String> = HashSet::new();
     let mut total_shell = 0usize;
     let mut total_risky = 0usize;
     let mut total_in = 0i64;
@@ -86,8 +115,13 @@ pub fn generate_report(
     let mut total_cost = 0.0f64;
     let mut risky_examples: Vec<String> = Vec::new();
 
-    for path in &jsonl_files {
-        let Ok(m) = parse_claude_transcript(path) else {
+    for (agent_kind, path) in &log_files {
+        let parsed: Result<TranscriptMetrics> = match *agent_kind {
+            "codex" => parse_codex_transcript(path),
+            "gemini" => parse_gemini_transcript(path),
+            _ => parse_claude_transcript(path),
+        };
+        let Ok(m) = parsed else {
             continue;
         };
         if let Some(ended) = m.ended_at {
@@ -95,6 +129,7 @@ pub fn generate_report(
                 continue;
             }
         }
+        agents_set.insert((*agent_kind).to_string());
 
         let proj_path = m
             .project_cwd
@@ -133,9 +168,10 @@ pub fn generate_report(
 
         let total_tokens = m.input_tokens + m.output_tokens + cache_toks;
         let entry = sessions_map
-            .entry(m.session_id.clone())
+            .entry(format!("{}:{}", agent_kind, m.session_id))
             .or_insert_with(|| SessionCostEntry {
                 session_id: m.session_id.clone(),
+                agent: (*agent_kind).to_string(),
                 project: proj_label,
                 model: m
                     .primary_model
@@ -157,10 +193,14 @@ pub fn generate_report(
     top_sessions.sort_by(|a, b| b.cost_usd.total_cmp(&a.cost_usd));
     top_sessions.truncate(5);
 
+    let mut agents_found: Vec<String> = agents_set.into_iter().collect();
+    agents_found.sort();
+
     let report = AuditReport {
         days,
-        files_scanned: jsonl_files.len(),
+        files_scanned: log_files.len(),
         sessions_count,
+        agents_found,
         total_shell_commands: total_shell,
         high_risk_commands: total_risky,
         unique_edited_files: edited_files_all.len(),
@@ -188,14 +228,20 @@ pub fn generate_report(
 
 fn print_terminal_card(r: &AuditReport) {
     let total_tokens = r.total_input_tokens + r.total_output_tokens + r.total_cache_tokens;
+    let agents_str = if r.agents_found.is_empty() {
+        "none".to_string()
+    } else {
+        r.agents_found.join(", ")
+    };
     println!("╭─────────────────────────────────────────────────────────────────╮");
     println!(
-        "│  AgentBox Audit Report (Last {:>2} days · Claude Code logs)       │",
-        r.days
+        "│  AgentBox Audit Report (Last {:>2} days · {:<22})│",
+        r.days,
+        agents_str.chars().take(22).collect::<String>()
     );
     println!("├─────────────────────────────────────────────────────────────────┤");
     println!(
-        "│  Sessions:       {:<10}   Est. API Cost:  ${:<12.2}   │",
+        "│  Sessions:       {:<10}   Est. API Equiv: ${:<12.2}   │",
         r.sessions_count, r.total_cost_usd
     );
     println!(
@@ -214,10 +260,11 @@ fn print_terminal_card(r: &AuditReport) {
     } else {
         for (i, s) in r.top_sessions.iter().enumerate() {
             let sid: String = s.session_id.chars().take(8).collect();
-            let proj: String = s.project.chars().take(18).collect();
+            let proj: String = s.project.chars().take(12).collect();
             println!(
-                "│  {}. {:<8}  {:<18}  {:>4} bash  {:>8}  ${:>6.2}  │",
+                "│  {}. {:<6} {:<8} {:<12} {:>4} bash {:>7} ${:>6.2} │",
                 i + 1,
+                s.agent,
                 sid,
                 proj,
                 s.shell_commands,
@@ -245,7 +292,8 @@ fn write_html_report(r: &AuditReport, path: &Path) -> Result<()> {
         .iter()
         .map(|s| {
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>${:.2}</td></tr>",
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>${:.2}</td></tr>",
+                html_escape(&s.agent),
                 html_escape(&s.session_id),
                 html_escape(&s.project),
                 html_escape(&s.model),
@@ -269,10 +317,10 @@ th,td{{padding:10px 12px;text-align:left;border-bottom:1px solid #334155}}</styl
 <div class="grid">
 <div class="card"><div>Sessions</div><div class="val">{}</div></div>
 <div class="card"><div>Shell Commands (High-Risk)</div><div class="val">{} ({})</div></div>
-<div class="card"><div>Est. API Cost</div><div class="val">${:.2}</div></div>
+<div class="card"><div>Est. API Equiv.</div><div class="val">${:.2}</div></div>
 </div>
 <h2>Top Sessions</h2>
-<table><thead><tr><th>Session</th><th>Project</th><th>Model</th><th>Bash Cmds</th><th>Cost</th></tr></thead>
+<table><thead><tr><th>Agent</th><th>Session</th><th>Project</th><th>Model</th><th>Bash Cmds</th><th>Cost</th></tr></thead>
 <tbody>{}</tbody></table></body></html>"#,
         r.days,
         r.sessions_count,

@@ -373,7 +373,7 @@ fn e2e_diff_show_undo_only_policy_override_and_report() {
     assert_eq!(fs::read_to_string(env.proj.join("src/a.txt")).unwrap(), "v1\n");
     assert_eq!(fs::read_to_string(env.proj.join("src/b.txt")).unwrap(), "v2\n");
 
-    // F6: abox report on synthetic Claude projects dir
+    // F6: abox report on synthetic Claude + Codex logs
     let logs_dir = env.claude_home.join("projects/myproj");
     fs::create_dir_all(&logs_dir).unwrap();
     fs::write(
@@ -381,21 +381,35 @@ fn e2e_diff_show_undo_only_policy_override_and_report() {
         r#"{"type":"assistant","uuid":"u1","sessionId":"s1","cwd":"/tmp/myproj","timestamp":"2026-11-17T01:00:00Z","message":{"id":"m1","model":"claude-sonnet-4-5","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"git push --force origin main"}}],"usage":{"input_tokens":500,"output_tokens":100,"cache_creation_input_tokens":0,"cache_read_input_tokens":1000}}}"#,
     )
     .unwrap();
+    let codex_sessions = env.root.join("codex_rep_home/sessions");
+    fs::create_dir_all(&codex_sessions).unwrap();
+    fs::write(
+        codex_sessions.join("rollout-1.jsonl"),
+        r#"{"session_id":"cx-1","cwd":"/tmp/myproj","model":"gpt-5-codex","usage":{"input_tokens":400,"output_tokens":80,"cached_input_tokens":200}}"#,
+    )
+    .unwrap();
     let html_file = env.root.join("report.html");
-    let rep_out = env.run_abox(
-        &[
+    let mut rep_cmd = Command::new(abox_bin());
+    let rep_out = rep_cmd
+        .current_dir(&env.proj)
+        .env("AGENTBOX_HOME", &env.abox_home)
+        .env("AGENTBOX_CLAUDE_HOME", &env.claude_home)
+        .env("AGENTBOX_CODEX_HOME", env.root.join("codex_rep_home"))
+        .env("AGENTBOX_GEMINI_HOME", env.root.join("gemini_rep_home"))
+        .args([
             "report",
             "--days",
             "30",
             "--json",
             "--html",
             html_file.to_str().unwrap(),
-        ],
-        None,
-    );
+        ])
+        .output()
+        .unwrap();
     assert!(rep_out.status.success());
     let rep_json = String::from_utf8_lossy(&rep_out.stdout);
     assert!(rep_json.contains("\"high_risk_commands\": 1"), "rep={}", rep_json);
+    assert!(rep_json.contains("\"sessions_count\": 2"), "rep={}", rep_json);
     assert!(html_file.exists());
 
     // doctor

@@ -326,11 +326,55 @@ pub fn parse_codex_transcript(path: &Path) -> Result<TranscriptMetrics> {
         let Ok(val) = serde_json::from_str::<Value>(line.trim()) else {
             continue;
         };
-        if let Some(sid) = val.get("session_id").and_then(|v| v.as_str()) {
+        if let Some(sid) = val
+            .get("session_id")
+            .or_else(|| val.pointer("/payload/id"))
+            .and_then(|v| v.as_str())
+        {
             metrics.session_id = sid.to_string();
+        }
+        if metrics.project_cwd.is_none() {
+            if let Some(cwd) = val
+                .get("cwd")
+                .or_else(|| val.pointer("/payload/cwd"))
+                .and_then(|v| v.as_str())
+            {
+                metrics.project_cwd = Some(cwd.to_string());
+            }
+        }
+        if let Some(ts_str) = val.get("timestamp").and_then(|v| v.as_str()) {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts_str) {
+                let ts = dt.timestamp();
+                metrics.started_at = Some(metrics.started_at.map_or(ts, |m| m.min(ts)));
+                metrics.ended_at = Some(metrics.ended_at.map_or(ts, |m| m.max(ts)));
+            }
         }
         if let Some(m) = val.get("model").and_then(|v| v.as_str()) {
             metrics.primary_model = Some(m.to_string());
+        }
+        // Capture shell commands in Codex rollout events
+        if let Some(name) = val
+            .pointer("/payload/name")
+            .or_else(|| val.get("name"))
+            .and_then(|v| v.as_str())
+        {
+            if matches!(name, "shell" | "shell_command" | "exec_command" | "Bash") {
+                if let Some(args_str) = val
+                    .pointer("/payload/arguments")
+                    .or_else(|| val.get("arguments"))
+                    .and_then(|v| v.as_str())
+                {
+                    if let Ok(args_val) = serde_json::from_str::<Value>(args_str) {
+                        if let Some(cmd) = args_val
+                            .get("command")
+                            .or_else(|| args_val.get("cmd"))
+                            .and_then(|v| v.as_str())
+                        {
+                            metrics.shell_commands.push(cmd.to_string());
+                        }
+                    }
+                }
+            }
         }
         if let Some(usage) = val.get("usage").or_else(|| val.pointer("/payload/info/total_token_usage")) {
             let inp = usage.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
