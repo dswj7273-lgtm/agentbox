@@ -17,4 +17,4 @@
   - `abox ui`: Zero-dependency local Web UI with timeline filtering, syntax-colored diffs, one-click step/file undo, and checkpoint creation/restoration.
   - `abox watch`: Filesystem watcher fallback for hookless editors like Cursor.
   - `abox export`: JSONL, OpenTelemetry (`OTLP/JSON`), and Markdown PR audit comment formats.
-  - `abox policy` (`init`, `list`, `test`), `abox checkpoint`, `abox status`, `abox projects`, `abox log --follow`, and `abox gc` storage-cap enforcement.
+  - `abox policy` (`init`, `list`, `test`), `abox checkpoint`, `abox status`, `abox projects`, `abox log --follow`, `abox diff --stat`, `abox export --agent`, `abox doctor` SQLite `quick_check`, and `abox gc` storage-cap enforcement.

@@ -388,6 +388,9 @@ fn e2e_diff_show_undo_only_policy_override_and_report() {
     let diff_str = String::from_utf8_lossy(&diff_out.stdout);
     assert!(diff_str.contains("-v1") && diff_str.contains("+v2"), "diff={}", diff_str);
 
+    let diff_stat = env.run_abox(&["diff", "2", "--stat"], None);
+    assert!(String::from_utf8_lossy(&diff_stat.stdout).contains("2 files changed"));
+
     // US2: Selective undo ONLY src/a.txt, keeping src/b.txt at v2
     let undo_only = env.run_abox(&["undo", "2", "--only", "src/a.txt", "--yes"], None);
     assert!(undo_only.status.success());
@@ -436,7 +439,8 @@ fn e2e_diff_show_undo_only_policy_override_and_report() {
     // doctor
     let doc_out = env.run_abox(&["doctor"], None);
     assert!(doc_out.status.success());
-    assert!(String::from_utf8_lossy(&doc_out.stdout).contains("Git:"));
+    let doc_str = String::from_utf8_lossy(&doc_out.stdout);
+    assert!(doc_str.contains("Git:") && doc_str.contains("integrity: ok"));
 
     // policy init / list / test & log/show --json & gc
     let p_init = env.run_abox(&["policy", "init"], None);
@@ -708,6 +712,10 @@ fn e2e_multi_agent_unified_timeline_claude_codex_gemini() {
     assert!(exp_md.status.success());
     let md_str = String::from_utf8_lossy(&exp_md.stdout);
     assert!(md_str.contains("### AgentBox Audit & Cost Summary") && md_str.contains("| `claude` |"));
+
+    let exp_claude_only = env.run_abox(&["export", "--format", "jsonl", "--all", "--agent", "claude"], None);
+    let ec_str = String::from_utf8_lossy(&exp_claude_only.stdout);
+    assert!(ec_str.contains("\"agent\":\"claude\"") && !ec_str.contains("\"agent\":\"gemini\""));
 
     // 4. OpenCode plugin hook + Guard + PostToolUse snapshot
     let opencode_guard = env.run_abox(

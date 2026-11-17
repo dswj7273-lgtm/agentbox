@@ -87,13 +87,16 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Show diff for a step (`43`) or step range (`40..44`)
+    /// Show diff for a step (`43`), step range (`40..44`), or checkpoint (`cp:<name>`)
     Diff {
-        /// Step ID or range A..B
+        /// Step ID, range A..B, or cp:<name>
         target: String,
         /// Output plain unified patch without header/color
         #[arg(long)]
         patch: bool,
+        /// Show diffstat summary only
+        #[arg(long)]
+        stat: bool,
     },
     /// Undo agent changes safely (creates a revertible undo snapshot first)
     Undo {
@@ -160,6 +163,9 @@ enum Commands {
         /// Export all sessions for this project
         #[arg(long)]
         all: bool,
+        /// Filter exported steps by agent name
+        #[arg(long)]
+        agent: Option<String>,
         #[arg(long, default_value_t = 500)]
         limit: usize,
         /// Write output to file instead of stdout
@@ -253,7 +259,11 @@ fn main() -> Result<()> {
             follow,
         } => commands::cmd_log(all, agent, since, file, limit, json, follow),
         Commands::Show { step, json } => commands::cmd_show(step, json),
-        Commands::Diff { target, patch } => commands::cmd_diff(&target, patch),
+        Commands::Diff {
+            target,
+            patch,
+            stat,
+        } => commands::cmd_diff(&target, patch, stat),
         Commands::Undo {
             step,
             to,
@@ -276,9 +286,10 @@ fn main() -> Result<()> {
         Commands::Export {
             format,
             all,
+            agent,
             limit,
             out,
-        } => export::cmd_export(&format, all, limit, out.as_deref()),
+        } => export::cmd_export(&format, all, agent, limit, out.as_deref()),
         Commands::Ui { port, no_open } => ui::cmd_ui(port, no_open),
         Commands::Watch {
             agent,

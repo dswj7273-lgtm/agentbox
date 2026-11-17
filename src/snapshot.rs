@@ -498,15 +498,22 @@ pub fn diff_patch(
     tree_a: &str,
     tree_b: &str,
     color: bool,
+    stat_only: bool,
 ) -> Result<String> {
     if tree_a == tree_b {
         return Ok(String::new());
     }
     let color_flag = if color { "--color=always" } else { "--color=never" };
+    let mut args = vec!["diff", color_flag];
+    if stat_only {
+        args.push("--stat");
+    }
+    args.push(tree_a);
+    args.push(tree_b);
     let out = Command::new("git")
         .arg("--git-dir")
         .arg(shadow_repo)
-        .args(["diff", color_flag, tree_a, tree_b])
+        .args(&args)
         .output()
         .context("Failed to run git diff")?;
 

@@ -153,7 +153,7 @@ fn api_diff(cwd: &Path, query: &str) -> Result<String> {
     let shadow_repo = paths.shadow_repo_dir(&proj_hash);
 
     let patch = match (&step.pre_tree, &step.post_tree) {
-        (Some(a), Some(b)) if a != b => diff_patch(&shadow_repo, a, b, false).unwrap_or_default(),
+        (Some(a), Some(b)) if a != b => diff_patch(&shadow_repo, a, b, false, false).unwrap_or_default(),
         _ => String::new(),
     };
 

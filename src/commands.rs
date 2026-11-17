@@ -321,7 +321,7 @@ pub fn cmd_show(step_id: i64, json_out: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_diff(target: &str, patch_only: bool) -> Result<()> {
+pub fn cmd_diff(target: &str, patch_only: bool, stat_only: bool) -> Result<()> {
     let paths = AgentBoxPaths::resolve()?;
     let db = Database::open(&paths.db_path())?;
     let cwd = std::env::current_dir()?;
@@ -371,7 +371,7 @@ pub fn cmd_diff(target: &str, patch_only: bool) -> Result<()> {
     }
 
     let color = !patch_only && std::io::stdout().is_terminal();
-    let patch = diff_patch(&shadow_repo, &tree_a, &tree_b, color)?;
+    let patch = diff_patch(&shadow_repo, &tree_a, &tree_b, color, stat_only)?;
     if !patch_only {
         println!("Diff for {}:\n", label);
     }
@@ -1051,10 +1051,11 @@ pub fn cmd_doctor() -> Result<()> {
     if paths.db_path().exists() {
         let db = Database::open(&paths.db_path())?;
         let (projs, sess, steps) = db.stats_counts()?;
+        let integrity = db.integrity_check().unwrap_or_else(|e| format!("error: {}", e));
         let size_mb = dir_size_bytes(&paths.home_dir) as f64 / (1024.0 * 1024.0);
         println!(
-            "Database:     ✔ {} project(s), {} session(s), {} step(s) | {:.2} MB total",
-            projs, sess, steps, size_mb
+            "Database:     ✔ {} project(s), {} session(s), {} step(s) | integrity: {} | {:.2} MB total",
+            projs, sess, steps, integrity, size_mb
         );
     } else {
         println!("Database:     not initialized yet (`abox init`)");

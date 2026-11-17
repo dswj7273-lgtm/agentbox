@@ -750,6 +750,13 @@ impl Database {
         Ok((projects, sessions, steps))
     }
 
+    pub fn integrity_check(&self) -> Result<String> {
+        let res: String = self
+            .conn
+            .query_row("PRAGMA quick_check", [], |r| r.get(0))?;
+        Ok(res)
+    }
+
     pub fn upsert_checkpoint(
         &self,
         project_hash: &str,

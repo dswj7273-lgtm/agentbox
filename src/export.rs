@@ -6,7 +6,13 @@ use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::Path;
 
-pub fn cmd_export(format: &str, all_sessions: bool, limit: usize, out_path: Option<&Path>) -> Result<()> {
+pub fn cmd_export(
+    format: &str,
+    all_sessions: bool,
+    agent: Option<String>,
+    limit: usize,
+    out_path: Option<&Path>,
+) -> Result<()> {
     let paths = AgentBoxPaths::resolve()?;
     if !paths.db_path().exists() {
         bail!("No AgentBox database found. Run `abox init` first.");
@@ -18,7 +24,7 @@ pub fn cmd_export(format: &str, all_sessions: bool, limit: usize, out_path: Opti
     let filter = LogFilter {
         project: Some(project_root.to_string_lossy().to_string()),
         all_sessions,
-        agent: None,
+        agent,
         since_ts: None,
         file_path: None,
         limit,
