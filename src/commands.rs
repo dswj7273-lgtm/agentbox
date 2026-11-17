@@ -708,7 +708,7 @@ pub fn cmd_policy_list() -> Result<()> {
     let pp = project_root.join(".agentbox/policy.yaml");
     let engine = GuardEngine::load(gp.exists().then_some(gp.as_path()), pp.exists().then_some(pp.as_path()));
 
-    println!(" {:<28} {:<8} {:<30}", "RULE ID", "ACTION", "TOOLS");
+    println!(" {:<24} {:<8} {:<24} {}", "RULE ID", "ACTION", "TOOLS", "REASON");
     for r in engine.list_rules() {
         let tools = if r.tools.is_empty() {
             "*".to_string()
@@ -716,10 +716,11 @@ pub fn cmd_policy_list() -> Result<()> {
             r.tools.join(",")
         };
         println!(
-            " {:<28} {:<8} {}",
-            pad_or_truncate(&r.id, 28),
+            " {:<24} {:<8} {:<24} {}",
+            pad_or_truncate(&r.id, 24),
             r.action.as_str(),
-            pad_or_truncate(&tools, 36)
+            pad_or_truncate(&tools, 24),
+            pad_or_truncate(&r.reason, 48)
         );
     }
     Ok(())

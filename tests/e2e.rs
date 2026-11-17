@@ -440,6 +440,84 @@ fn e2e_diff_show_undo_only_policy_override_and_report() {
 }
 
 #[test]
+fn e2e_edge_cases_large_file_nested_repo_and_fail_open() {
+    let env = TestEnv::new("edge_cases");
+    fs::create_dir_all(env.proj.join("src")).unwrap();
+    fs::write(env.proj.join("src/normal.txt"), "before\n").unwrap();
+
+    // 21 MB large file (should be auto-excluded from shadow git and guarded against rm)
+    let big_file = env.proj.join("weights.bin");
+    {
+        let f = fs::File::create(&big_file).unwrap();
+        f.set_len(21 * 1024 * 1024).unwrap();
+    }
+
+    // Nested sub-git repository
+    let sub_repo = env.proj.join("vendor/sub");
+    fs::create_dir_all(&sub_repo).unwrap();
+    Command::new("git").arg("-C").arg(&sub_repo).arg("init").output().unwrap();
+    fs::write(sub_repo.join("lib.rs"), "pub fn sub() {}\n").unwrap();
+
+    env.run_abox(&["init", "--project"], None);
+
+    // 1. Fail-open test: malformed JSON on hook stdin must exit 0 and write error.log
+    let fail_open = env.run_abox(&["hook", "claude"], Some("{not-valid-json"));
+    assert!(fail_open.status.success(), "hook must fail-open on bad stdin");
+    assert!(env.abox_home.join("error.log").exists());
+
+    // 2. Large file deletion triggers Guard `ask` because it cannot be restored by snapshot
+    let rm_big = env.run_abox(
+        &["hook", "claude"],
+        Some(&serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "s-edge",
+            "cwd": env.proj.to_string_lossy(),
+            "tool_name": "Bash",
+            "tool_use_id": "tu-big",
+            "tool_input": { "command": "rm -f weights.bin" }
+        }).to_string()),
+    );
+    assert!(
+        String::from_utf8_lossy(&rm_big.stdout).contains("\"permissionDecision\":\"ask\""),
+        "expected Guard ask when removing >20MB excluded file, got: {}",
+        String::from_utf8_lossy(&rm_big.stdout)
+    );
+
+    // 3. Normal edit followed by undo must preserve both weights.bin and nested vendor/sub/.git
+    env.run_abox(
+        &["hook", "claude"],
+        Some(&serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "s-edge",
+            "cwd": env.proj.to_string_lossy(),
+            "tool_name": "Edit",
+            "tool_use_id": "tu-norm",
+            "tool_input": { "file_path": "src/normal.txt" }
+        }).to_string()),
+    );
+    fs::write(env.proj.join("src/normal.txt"), "after\n").unwrap();
+    env.run_abox(
+        &["hook", "claude"],
+        Some(&serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "s-edge",
+            "cwd": env.proj.to_string_lossy(),
+            "tool_name": "Edit",
+            "tool_use_id": "tu-norm",
+            "tool_input": { "file_path": "src/normal.txt" }
+        }).to_string()),
+    );
+
+    let undo = env.run_abox(&["undo", "--yes"], None);
+    assert!(undo.status.success());
+    assert_eq!(fs::read_to_string(env.proj.join("src/normal.txt")).unwrap(), "before\n");
+    assert!(big_file.exists());
+    assert_eq!(fs::metadata(&big_file).unwrap().len(), 21 * 1024 * 1024);
+    assert!(sub_repo.join(".git").exists());
+    assert_eq!(fs::read_to_string(sub_repo.join("lib.rs")).unwrap(), "pub fn sub() {}\n");
+}
+
+#[test]
 fn e2e_multi_agent_unified_timeline_claude_codex_gemini() {
     let env = TestEnv::new("multi_agent");
     let codex_home = env.root.join("codex_home");

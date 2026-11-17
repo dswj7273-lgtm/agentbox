@@ -25,6 +25,8 @@ const DEFAULT_EXCLUDES: &[&str] = &[
 
 const LARGE_FILE_MARKER_START: &str = "# --- agentbox auto-excluded >20MB files ---";
 const LARGE_FILE_MARKER_END: &str = "# --- end agentbox auto-excluded ---";
+const NESTED_REPO_MARKER_START: &str = "# --- agentbox auto-excluded nested repos ---";
+const NESTED_REPO_MARKER_END: &str = "# --- end agentbox nested repos ---";
 
 pub struct ProjectLock {
     _file: File,
@@ -110,12 +112,19 @@ pub fn sync_excludes(project_root: &Path, shadow_repo: &Path) -> Result<()> {
     let exclude_path = info_dir.join("exclude");
 
     let mut existing_large_block = String::new();
+    let mut existing_nested_block = String::new();
     if let Ok(prev) = std::fs::read_to_string(&exclude_path) {
         if let (Some(s), Some(e)) = (
             prev.find(LARGE_FILE_MARKER_START),
             prev.find(LARGE_FILE_MARKER_END),
         ) {
             existing_large_block = prev[s..e + LARGE_FILE_MARKER_END.len()].to_string();
+        }
+        if let (Some(s), Some(e)) = (
+            prev.find(NESTED_REPO_MARKER_START),
+            prev.find(NESTED_REPO_MARKER_END),
+        ) {
+            existing_nested_block = prev[s..e + NESTED_REPO_MARKER_END.len()].to_string();
         }
     }
 
@@ -139,18 +148,24 @@ pub fn sync_excludes(project_root: &Path, shadow_repo: &Path) -> Result<()> {
         content.push_str(&existing_large_block);
         content.push('\n');
     }
+    if !existing_nested_block.is_empty() {
+        content.push('\n');
+        content.push_str(&existing_nested_block);
+        content.push('\n');
+    }
 
     std::fs::write(&exclude_path, content)?;
     Ok(())
 }
 
-/// Scan workspace for files > 20MB (skipping common build/VCS dirs) and add them
-/// to `<shadow_repo>/info/exclude` so git never hashes huge binaries.
+/// Scan workspace for files > 20MB and nested git repos (skipping common build/VCS dirs)
+/// and add them to `<shadow_repo>/info/exclude` so git never hashes huge binaries or fails on unborn nested repos.
 pub fn scan_and_exclude_large_files(
     project_root: &Path,
     shadow_repo: &Path,
 ) -> Result<Vec<String>> {
     let mut large_files = Vec::new();
+    let mut nested_repos = Vec::new();
     let skip_dirs: HashSet<&str> = [
         ".git",
         "node_modules",
@@ -178,8 +193,11 @@ pub fn scan_and_exclude_large_files(
                     if skip_dirs.contains(name) {
                         return false;
                     }
-                    // Also skip nested git repos
+                    // Also skip and exclude nested git repos
                     if entry.path().join(".git").exists() {
+                        if let Ok(rel) = entry.path().strip_prefix(project_root) {
+                            nested_repos.push(rel.to_string_lossy().replace('\\', "/"));
+                        }
                         return false;
                     }
                 }
@@ -201,13 +219,10 @@ pub fn scan_and_exclude_large_files(
 
     let exclude_path = shadow_repo.join("info").join("exclude");
     let current = std::fs::read_to_string(&exclude_path).unwrap_or_default();
-    let base = if let Some(idx) = current.find(LARGE_FILE_MARKER_START) {
-        current[..idx].trim_end().to_string()
-    } else {
-        current.trim_end().to_string()
-    };
+    let mut base = strip_marker_block(&current, LARGE_FILE_MARKER_START, LARGE_FILE_MARKER_END);
+    base = strip_marker_block(&base, NESTED_REPO_MARKER_START, NESTED_REPO_MARKER_END);
 
-    let mut updated = base;
+    let mut updated = base.trim_end().to_string();
     if !large_files.is_empty() {
         updated.push_str("\n\n");
         updated.push_str(LARGE_FILE_MARKER_START);
@@ -218,13 +233,33 @@ pub fn scan_and_exclude_large_files(
             updated.push('\n');
         }
         updated.push_str(LARGE_FILE_MARKER_END);
-        updated.push('\n');
-    } else {
-        updated.push('\n');
     }
+    if !nested_repos.is_empty() {
+        updated.push_str("\n\n");
+        updated.push_str(NESTED_REPO_MARKER_START);
+        updated.push('\n');
+        for r in &nested_repos {
+            updated.push('/');
+            updated.push_str(r);
+            updated.push('/');
+            updated.push('\n');
+        }
+        updated.push_str(NESTED_REPO_MARKER_END);
+    }
+    updated.push('\n');
 
     std::fs::write(&exclude_path, updated)?;
     Ok(large_files)
+}
+
+fn strip_marker_block(text: &str, start_marker: &str, end_marker: &str) -> String {
+    if let (Some(s), Some(e)) = (text.find(start_marker), text.find(end_marker)) {
+        let before = &text[..s];
+        let after = &text[e + end_marker.len()..];
+        format!("{}\n{}", before.trim_end(), after.trim_start())
+    } else {
+        text.to_string()
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -262,8 +262,11 @@ async function selectStep(id) {
   const res = await fetch(`/api/diff?step=${id}`);
   const d = await res.json();
   const s = d.step;
-  const files = (d.files || []).map(f => `<li><code>${esc(f.change)} ${esc(f.path)}</code></li>`).join('');
-  const undoBtn = s.pre_tree ? `<button class="danger" onclick="undoStep(${s.id}, false)">Undo to before #${s.id}</button>` : '';
+  const files = (d.files || []).map(f => {
+    const fileUndo = s.pre_tree ? ` <button style="padding:2px 8px;font-size:11px;margin-left:8px" onclick="undoStep(${s.id}, false, ['${escAttr(f.path)}'])">Undo file</button>` : '';
+    return `<li style="margin:4px 0"><code>${esc(f.change)} ${esc(f.path)}</code>${fileUndo}</li>`;
+  }).join('');
+  const undoBtn = s.pre_tree ? `<button class="danger" onclick="undoStep(${s.id}, false, [])">Undo to before #${s.id}</button>` : '';
   document.getElementById('detailPane').innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <h2 style="margin:0;font-size:18px">Step #${s.id}: ${esc(s.tool)} (${esc(s.agent)})</h2>
@@ -278,12 +281,12 @@ async function selectStep(id) {
     <pre class="diff">${colorDiff(d.patch || '(no diff)')}</pre>
   `;
 }
-async function undoStep(id, force) {
-  const res = await fetch('/api/undo', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({step_id:id, force}) });
+async function undoStep(id, force, only) {
+  const res = await fetch('/api/undo', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({step_id:id, force, only: only || []}) });
   const out = await res.json();
   if (out.status === 'Conflict') {
     if (confirm('Manual edits detected outside AgentBox:\\n' + out.conflict_files.map(x=>x[1]+' '+x[0]).join('\\n') + '\\n\\nForce overwrite?')) {
-      return undoStep(id, true);
+      return undoStep(id, true, only);
     }
     return;
   }
@@ -291,6 +294,7 @@ async function undoStep(id, force) {
   loadSteps();
 }
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escAttr(s){ return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 function colorDiff(p){
   return p.split('\n').map(l => {
     const e = esc(l);

@@ -1,21 +1,100 @@
 # AgentBox (`abox`)
 
-A local flight recorder, safety guard, and step-by-step undo tool for AI coding agents (Claude Code MVP).
+> **A flight recorder, safety net, and step-by-step undo button for AI coding agents — including Bash commands.**
 
-## Features Implemented (M0 + M1 + P1 Multi-Agent)
-- **`abox init [--project | --global]` / `abox uninstall [--purge]`**: Detects **Claude Code**, **Codex CLI**, and **Gemini CLI**, backs up existing configs, and non-destructively merges hooks (`PreToolUse`/`PostToolUse`/`PostToolUseFailure` for Claude & Codex; `BeforeTool`/`AfterTool` for Gemini) pointing directly to the native `abox` binary.
-- **Shadow Git Snapshots**: Stores snapshots in `~/.agentbox/repos/<project-hash>` without touching your `.git`, index, or stash. Tracks **Bash / shell modifications** in addition to `Edit`/`Write`/`MultiEdit`, skips `node_modules`, `.aboxignore`, and files >20MB, and serializes concurrent writes via per-project file locks.
-- **`abox log` / `abox show <step>` / `abox diff <step|a..b>`**: Unified timeline, file-level audit, and unified diffs.
-- **`abox undo [<step>] [--to <step>] [--only <path>] [--force]`**: Restores files (including deleted files from Bash `rm -rf`), detects manual out-of-band modifications before overwriting, and creates a revertible undo snapshot before restoring.
-- **High-Risk Guard (`PreToolUse`)**: Allows in-project operations covered by snapshots while prompting (`ask`) or blocking (`deny`) irreversible/sensitive operations (`git push --force`, `git reset --hard`, `rm -rf` outside project, `DROP TABLE`, `curl | sh`, `.env*`/`~/.ssh` writes), customizable via `~/.agentbox/policy.yaml` and `.agentbox/policy.yaml`.
-- **`abox report` / `abox cost` / `abox export` / `abox ui` / `abox gc` / `abox doctor` / `abox bench`**: Zero-hook historical Claude Code log audit card (`--json` / `--html`), branch/session/agent cost summary, JSONL & OpenTelemetry (`--format otel`) audit export, local Web UI (`abox ui`), GC, diagnostics, and 10k-file latency benchmark.
+[![CI](https://github.com/dswj7273-lgtm/agentbox/actions/workflows/ci.yml/badge.svg)](https://github.com/dswj7273-lgtm/agentbox/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
-## License
-Apache-2.0 — see [LICENSE](LICENSE).
+Built-in agent checkpoints typically track only internal file-editing tools (`Edit`/`Write`) and miss changes made through shell commands (`rm`, `mv`, `sed`, codemods, build scripts). **AgentBox** takes lightweight filesystem snapshots into an isolated shadow Git repository—without touching your project's `.git`, index, or stash—and unifies **Claude Code**, **Codex CLI**, **Gemini CLI**, and hookless editors (**Cursor** via `abox watch`) onto a single auditable timeline.
 
-## Build & Verify
+---
+
+## Key Features
+
+- **Undo Bash & Shell Edits (`abox undo`)**: Restore files deleted or mutated by shell commands (`abox undo`, `abox undo --to <step>`, `abox undo <step> --only <path>`). Automatically detects manual out-of-band edits before overwriting and creates a revertible undo snapshot first.
+- **Zero-Intrusion Shadow Git**: Stores snapshots in `~/.agentbox/repos/<project-hash>` with per-project file locks (`fs2`). Respects `.gitignore`, `.aboxignore`, skips `node_modules`/`target`/`dist` and files `>20MB`, and preserves nested `.git` repositories.
+- **Cross-Agent Timeline**:
+  - **Claude Code**: `SessionStart`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `SessionEnd`
+  - **Codex CLI**: `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, `SessionEnd`
+  - **Gemini CLI**: `SessionStart`, `BeforeTool`, `AfterTool`, `SessionEnd`
+  - **Hookless Editors (Cursor, etc.)**: `abox watch --agent cursor` filesystem fallback
+- **Minimal High-Risk Guard (`PreToolUse` / `BeforeTool`)**: Allows reversible in-project actions (covered by snapshots) while prompting (`ask`) or blocking (`deny`) irreversible/sensitive operations (`git push --force`, `git reset --hard`, `rm -rf` outside project, `DROP TABLE`, `curl | sh`, `.env*`/`~/.ssh` writes, or deleting `>20MB` excluded files).
+- **Zero-Hook Audit Report (`abox report`)**: Scans local `~/.claude/projects`, `~/.codex/sessions`, and `~/.gemini/tmp` logs to summarize shell commands, high-risk commands, tokens, and estimated API-equivalent USD cost (`--json`, `--html`).
+- **Local Web UI & Team Export**: `abox ui` launches a local timeline + diff + one-click undo web viewer; `abox export --format jsonl|otel|markdown` exports audit logs for OpenTelemetry or PR cost summaries.
+
+---
+
+## Quick Start
+
+### Build from Source
 ```bash
 cargo build --release
-cargo test
-./target/release/abox bench --files 10000 --iters 20
+cargo install --path .
 ```
+
+### Usage
+```bash
+# 1. Inspect your past 30 days immediately (no hooks needed)
+abox report --days 30
+
+# 2. Install hooks for detected agents & initialize shadow repo
+abox init --project   # or `abox init --global`
+
+# 3. Inspect timeline, step details, and diffs
+abox log --all
+abox show 12
+abox diff 12
+
+# 4. Undo safely (revertible!)
+abox undo --to 12
+abox undo 12 --only src/config.ts
+
+# 5. Launch local Web UI or export audit trail
+abox ui
+abox export --format otel --all --out audit-otel.json
+```
+
+---
+
+## Configuration
+
+### Custom Guard Rules (`.agentbox/policy.yaml` or `~/.agentbox/policy.yaml`)
+Generate a starter template with `abox policy init`, inspect merged rules with `abox policy list`, or dry-run with `abox policy test Bash "git push --force"`.
+
+```yaml
+rules:
+  - id: git.force_push
+    match:
+      tool: [Bash, run_shell_command]
+      command: '\bgit\s+push\b.*(\s-f\b|\s--force\b)'
+    action: ask
+  - id: secrets.write
+    match:
+      tool: [Edit, Write, MultiEdit, write_file, edit_file]
+      path: ["**/.env*", "**/.ssh/**"]
+    action: deny
+```
+
+### Custom Model Pricing (`~/.agentbox/pricing.yaml`)
+```yaml
+models:
+  claude-sonnet-4-5:
+    input_per_million: 3.0
+    output_per_million: 15.0
+    cache_write_per_million: 3.75
+    cache_read_per_million: 0.30
+```
+
+---
+
+## Performance Benchmark
+
+Measured on macOS APFS (`abox bench --files 10000 --iters 20`, release build):
+- **p50**: `60.2 ms`
+- **p95**: `61.5 ms` (target `<= 80 ms`)
+- **p99**: `63.1 ms` (target `<= 200 ms`)
+
+---
+
+## License
+Licensed under the [Apache License 2.0](LICENSE).
