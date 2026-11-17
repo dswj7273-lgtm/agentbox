@@ -545,6 +545,11 @@ fn e2e_multi_agent_unified_timeline_claude_codex_gemini() {
     let otel_str = String::from_utf8_lossy(&exp_otel.stdout);
     assert!(otel_str.contains("\"resourceSpans\"") && otel_str.contains("agentbox.audit"));
 
+    let exp_md = env.run_abox(&["export", "--format", "markdown", "--all"], None);
+    assert!(exp_md.status.success());
+    let md_str = String::from_utf8_lossy(&exp_md.stdout);
+    assert!(md_str.contains("### AgentBox Audit & Cost Summary") && md_str.contains("| `claude` |"));
+
     // Uninstall removes all 3 cleanly
     let mut un_cmd = Command::new(abox_bin());
     let un_out = un_cmd

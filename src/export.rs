@@ -28,7 +28,11 @@ pub fn cmd_export(format: &str, all_sessions: bool, limit: usize, out_path: Opti
     let payload = match format {
         "jsonl" => export_jsonl(&db, &steps)?,
         "otel" => export_otel(&db, &steps, &project_root.to_string_lossy())?,
-        other => bail!("Unsupported export format `{}` (expected jsonl or otel)", other),
+        "markdown" => export_markdown(&db, &steps, &project_root.to_string_lossy())?,
+        other => bail!(
+            "Unsupported export format `{}` (expected jsonl, otel, or markdown)",
+            other
+        ),
     };
 
     if let Some(dest) = out_path {
@@ -120,6 +124,58 @@ fn export_otel(db: &Database, steps: &[StepRecord], project: &str) -> Result<Str
         }]
     });
     Ok(serde_json::to_string_pretty(&otlp)? + "\n")
+}
+
+fn export_markdown(db: &Database, steps: &[StepRecord], project: &str) -> Result<String> {
+    use std::collections::BTreeSet;
+
+    let agent_costs = db.cost_by("agent", Some(project)).unwrap_or_default();
+    let total_cost: f64 = agent_costs.iter().map(|c| c.cost_usd).sum();
+    let total_tokens: i64 = agent_costs
+        .iter()
+        .map(|c| c.input_tokens + c.output_tokens + c.cache_tokens)
+        .sum();
+    let guard_alerts = steps
+        .iter()
+        .filter(|s| matches!(s.guard_decision.as_deref(), Some("ask") | Some("deny")))
+        .count();
+
+    let mut unique_files = BTreeSet::new();
+    for s in steps {
+        for f in db.get_step_files(s.id).unwrap_or_default() {
+            unique_files.insert(f.path);
+        }
+    }
+
+    let mut md = String::new();
+    md.push_str("### AgentBox Audit & Cost Summary\n\n");
+    md.push_str(&format!(
+        "- **Recorded Steps:** {}\n- **Files Touched:** {}\n- **Guard Alerts (`ask`/`deny`):** {}\n- **Total Tokens:** {}\n- **Est. API-Equiv. Cost:** ${:.2}\n\n",
+        steps.len(),
+        unique_files.len(),
+        guard_alerts,
+        crate::report::format_tokens(total_tokens),
+        total_cost
+    ));
+
+    if !agent_costs.is_empty() {
+        md.push_str("| Agent | Sessions | Steps | Tokens | API Equiv. ($) |\n");
+        md.push_str("|---|---:|---:|---:|---:|\n");
+        for c in &agent_costs {
+            let t = c.input_tokens + c.output_tokens + c.cache_tokens;
+            md.push_str(&format!(
+                "| `{}` | {} | {} | {} | ${:.2} |\n",
+                c.key,
+                c.sessions,
+                c.steps,
+                crate::report::format_tokens(t),
+                c.cost_usd
+            ));
+        }
+        md.push('\n');
+    }
+
+    Ok(md)
 }
 
 fn hex_hash(input: &str, hex_len: usize) -> String {

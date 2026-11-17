@@ -123,9 +123,9 @@ enum Commands {
         #[arg(long)]
         all: bool,
     },
-    /// Export audit timeline in JSONL or OpenTelemetry (OTLP/JSON) format
+    /// Export audit timeline in JSONL, OpenTelemetry (OTLP/JSON), or Markdown PR comment format
     Export {
-        #[arg(long, default_value = "jsonl", value_parser = ["jsonl", "otel"])]
+        #[arg(long, default_value = "jsonl", value_parser = ["jsonl", "otel", "markdown"])]
         format: String,
         /// Export all sessions for this project
         #[arg(long)]
