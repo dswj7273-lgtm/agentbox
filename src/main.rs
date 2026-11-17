@@ -9,6 +9,7 @@ mod pricing;
 mod report;
 mod snapshot;
 mod ui;
+mod watch;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -143,6 +144,18 @@ enum Commands {
         #[arg(long)]
         no_open: bool,
     },
+    /// Watch filesystem changes as a fallback for agents without hooks (e.g., Cursor)
+    Watch {
+        /// Agent label recorded in timeline
+        #[arg(long, default_value = "cursor")]
+        agent: String,
+        /// Polling interval in milliseconds
+        #[arg(long, default_value_t = 1500)]
+        interval_ms: u64,
+        /// Optional maximum poll cycles before exiting
+        #[arg(long)]
+        cycles: Option<usize>,
+    },
     /// Prune old sessions and compact shadow git repositories
     Gc {
         #[arg(long, default_value_t = 14)]
@@ -203,6 +216,11 @@ fn main() -> Result<()> {
             out,
         } => export::cmd_export(&format, all, limit, out.as_deref()),
         Commands::Ui { port, no_open } => ui::cmd_ui(port, no_open),
+        Commands::Watch {
+            agent,
+            interval_ms,
+            cycles,
+        } => watch::cmd_watch(&agent, interval_ms, cycles),
         Commands::Gc { days, max_gb } => commands::cmd_gc(days, max_gb),
         Commands::Doctor => commands::cmd_doctor(),
         Commands::Bench { files, iters, repo } => commands::cmd_bench(files, iters, repo),
