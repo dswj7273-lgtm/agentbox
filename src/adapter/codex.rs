@@ -409,3 +409,54 @@ fn shell_escape_path(p: &Path) -> String {
         s.to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn codex_install_uninstall_and_rollout_parse() {
+        let dir = std::env::temp_dir().join(format!("abox_codex_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".codex")).unwrap();
+        let hooks = dir.join(".codex/hooks.json");
+        std::fs::write(
+            &hooks,
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"custom-guard"}]}]}}"#,
+        )
+        .unwrap();
+
+        let adapter = CodexAdapter::new();
+        let rep = adapter
+            .install_hooks(InstallScope::Project, &dir, Path::new("/usr/local/bin/abox"))
+            .unwrap();
+        assert!(rep.post_install_note.is_some());
+        let installed = std::fs::read_to_string(&hooks).unwrap();
+        assert!(installed.contains("custom-guard") && installed.contains("hook codex"));
+
+        adapter.uninstall_hooks(InstallScope::Project, &dir).unwrap();
+        let after = std::fs::read_to_string(&hooks).unwrap();
+        assert!(after.contains("custom-guard") && !after.contains("hook codex"));
+
+        let rollout = dir.join("rollout.jsonl");
+        let mut f = File::create(&rollout).unwrap();
+        writeln!(
+            f,
+            r#"{{"session_id":"cx-99","cwd":"/tmp/app","model":"gpt-5-codex","payload":{{"name":"shell_command","arguments":"{{\"command\":\"rm -rf build\"}}"}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            f,
+            r#"{{"session_id":"cx-99","usage":{{"input_tokens":2000,"output_tokens":500,"cached_input_tokens":1000}}}}"#
+        )
+        .unwrap();
+        let metrics = parse_codex_transcript(&rollout).unwrap();
+        assert_eq!(metrics.session_id, "cx-99");
+        assert_eq!(metrics.shell_commands, vec!["rm -rf build"]);
+        assert_eq!(metrics.input_tokens, 2000);
+        assert!(metrics.cost_usd > 0.0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -364,3 +364,26 @@ fn shell_escape_path(p: &Path) -> String {
         s.to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gemini_hooks_and_decisions() {
+        let adapter = GeminiAdapter::new();
+        let ev = adapter
+            .parse_hook_event(
+                r#"{"hook_event_name":"BeforeTool","session_id":"gm-1","cwd":"/tmp","tool_name":"run_shell_command","tool_input":{"command":"ls"}}"#,
+            )
+            .unwrap();
+        assert_eq!(ev.kind, HookEventKind::PreToolUse);
+        assert_eq!(ev.agent, "gemini");
+
+        assert!(adapter.format_pretool_decision("allow", "ok").is_none());
+        let ask = adapter.format_pretool_decision("ask", "confirm").unwrap();
+        assert!(ask.contains("\"decision\":\"ask\"") && ask.contains("systemMessage"));
+        let deny = adapter.format_pretool_decision("deny", "blocked").unwrap();
+        assert!(deny.contains("\"decision\":\"deny\"") && deny.contains("reason"));
+    }
+}

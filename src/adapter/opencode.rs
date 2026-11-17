@@ -218,3 +218,36 @@ export const AgentBoxPlugin = async ({{ directory }}) => {{
         .ok()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opencode_plugin_install_and_parse() {
+        let dir = std::env::temp_dir().join(format!("abox_oc_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let adapter = OpenCodeAdapter::new();
+        let rep = adapter
+            .install_hooks(InstallScope::Project, &dir, Path::new("/usr/local/bin/abox"))
+            .unwrap();
+        assert!(rep.config_path.exists());
+        let js = std::fs::read_to_string(&rep.config_path).unwrap();
+        assert!(js.contains("tool.execute.before") && js.contains("Managed by AgentBox"));
+        assert!(adapter.is_installed(InstallScope::Project, &dir));
+
+        let ev = adapter
+            .parse_hook_event(
+                r#"{"hook_event_name":"tool.execute.before","session_id":"oc-1","cwd":"/tmp","tool_name":"bash","tool_input":{"command":"pwd"}}"#,
+            )
+            .unwrap();
+        assert_eq!(ev.kind, HookEventKind::PreToolUse);
+        assert_eq!(ev.agent, "opencode");
+
+        adapter.uninstall_hooks(InstallScope::Project, &dir).unwrap();
+        assert!(!rep.config_path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

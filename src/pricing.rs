@@ -109,3 +109,17 @@ pub fn estimate_cost_usd(
     let cr_cost = (cache_read_tokens.max(0) as f64 / 1_000_000.0) * p.cache_read_per_million;
     in_cost + out_cost + cw_cost + cr_cost
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn estimates_known_model_pricing() {
+        let c = estimate_cost_usd("claude-sonnet-4-5", 1_000_000, 1_000_000, 0, 0);
+        assert!((c - 18.0).abs() < 1e-6);
+
+        let opus45 = estimate_cost_usd("claude-opus-4-5", 1_000_000, 0, 0, 0);
+        assert!((opus45 - 5.0).abs() < 1e-6);
+    }
+}
