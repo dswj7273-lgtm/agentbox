@@ -1,5 +1,6 @@
 mod adapter;
 mod commands;
+mod completions;
 mod db;
 mod export;
 mod guard;
@@ -215,6 +216,11 @@ enum Commands {
         #[arg(long)]
         repo: Option<PathBuf>,
     },
+    /// Print shell completion script (bash, zsh, fish)
+    Completions {
+        #[arg(value_parser = ["bash", "zsh", "fish"])]
+        shell: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -304,5 +310,6 @@ fn main() -> Result<()> {
         },
         Commands::Doctor => commands::cmd_doctor(),
         Commands::Bench { files, iters, repo } => commands::cmd_bench(files, iters, repo),
+        Commands::Completions { shell } => completions::print_completions(&shell),
     }
 }

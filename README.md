@@ -58,9 +58,29 @@ abox status
 abox projects
 abox ui
 abox export --format otel --all --out audit-otel.json
+
+# 6. Enable shell completions (zsh / bash / fish)
+abox completions zsh > ~/.zfunc/_abox
 ```
 
 See [examples/github-actions/agentbox-pr-comment.yml](examples/github-actions/agentbox-pr-comment.yml) for posting `abox export --format markdown` on Pull Requests.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+  Agents["Claude Code / Codex / Gemini / OpenCode"] -->|hooks| Hook["abox hook (native binary)"]
+  Watch["Cursor / Hookless Editors"] -->|fs poll| WatchCmd["abox watch"]
+  Hook --> Guard["Guard Rule Engine"]
+  Hook --> Snap["Shadow Git (~/.agentbox/repos)"]
+  WatchCmd --> Snap
+  Hook --> DB[("SQLite WAL Event Store")]
+  WatchCmd --> DB
+  CLI["abox log / diff / undo / ui / export"] --> DB
+  CLI --> Snap
+```
 
 ---
 
