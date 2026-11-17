@@ -319,6 +319,23 @@ pub fn cmd_diff(target: &str, patch_only: bool) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, serde::Serialize)]
+pub enum UndoStatus {
+    Restored,
+    Conflict,
+    NoChanges,
+    Aborted,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct UndoOutcome {
+    pub status: UndoStatus,
+    pub target_step_id: i64,
+    pub restored_files: usize,
+    pub undo_step_id: Option<i64>,
+    pub conflict_files: Vec<(String, String)>,
+}
+
 pub fn cmd_undo(
     step_arg: Option<i64>,
     to_step: Option<i64>,
@@ -326,6 +343,46 @@ pub fn cmd_undo(
     force: bool,
     yes: bool,
 ) -> Result<()> {
+    let outcome = execute_undo(step_arg, to_step, only_paths, force, yes, false)?;
+    match outcome.status {
+        UndoStatus::Conflict => {
+            println!(
+                "⚠ Detected {} file(s) modified outside AgentBox since last recorded step:",
+                outcome.conflict_files.len()
+            );
+            for (p, ch) in outcome.conflict_files.iter().take(10) {
+                println!("  {}  {}", ch, p);
+            }
+            println!("Refusing to overwrite manual edits. Re-run with `--force` to override.");
+        }
+        UndoStatus::NoChanges => {
+            println!(
+                "Workspace already matches state before step #{}.",
+                outcome.target_step_id
+            );
+        }
+        UndoStatus::Aborted => {
+            println!("Aborted.");
+        }
+        UndoStatus::Restored => {
+            println!(
+                "✔ Restored {} file(s). (undo snapshot #{} created — `abox undo` to revert this undo)",
+                outcome.restored_files,
+                outcome.undo_step_id.unwrap_or(0)
+            );
+        }
+    }
+    Ok(())
+}
+
+pub fn execute_undo(
+    step_arg: Option<i64>,
+    to_step: Option<i64>,
+    only_paths: Vec<String>,
+    force: bool,
+    yes: bool,
+    non_interactive: bool,
+) -> Result<UndoOutcome> {
     let paths = AgentBoxPaths::resolve()?;
     let mut db = Database::open(&paths.db_path())?;
     let cwd = std::env::current_dir()?;
@@ -369,15 +426,13 @@ pub fn cmd_undo(
             };
 
             if !relevant_ext.is_empty() && !force {
-                println!(
-                    "⚠ Detected {} file(s) modified outside AgentBox since last recorded step:",
-                    relevant_ext.len()
-                );
-                for (p, ch) in relevant_ext.iter().take(10) {
-                    println!("  {}  {}", ch, p);
-                }
-                println!("Refusing to overwrite manual edits. Re-run with `--force` to override.");
-                return Ok(());
+                return Ok(UndoOutcome {
+                    status: UndoStatus::Conflict,
+                    target_step_id: target_step.id,
+                    restored_files: 0,
+                    undo_step_id: None,
+                    conflict_files: relevant_ext,
+                });
             }
         }
     }
@@ -398,11 +453,16 @@ pub fn cmd_undo(
     };
 
     if filtered_count == 0 {
-        println!("Workspace already matches state before step #{}.", target_step.id);
-        return Ok(());
+        return Ok(UndoOutcome {
+            status: UndoStatus::NoChanges,
+            target_step_id: target_step.id,
+            restored_files: 0,
+            undo_step_id: None,
+            conflict_files: Vec::new(),
+        });
     }
 
-    if !yes {
+    if !yes && !non_interactive {
         print!(
             "Restore {} file(s) to state before step #{} ({})? [y/N] ",
             filtered_count, target_step.id, target_step.input_summary
@@ -411,8 +471,13 @@ pub fn cmd_undo(
         let mut answer = String::new();
         std::io::stdin().read_line(&mut answer)?;
         if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
-            println!("Aborted.");
-            return Ok(());
+            return Ok(UndoOutcome {
+                status: UndoStatus::Aborted,
+                target_step_id: target_step.id,
+                restored_files: 0,
+                undo_step_id: None,
+                conflict_files: Vec::new(),
+            });
         }
     }
 
@@ -472,12 +537,13 @@ pub fn cmd_undo(
     let undo_id = db.insert_step(&undo_step, &applied)?;
     db.update_project_last_tree(&proj_hash, &post_snap.tree_hash, Some(undo_id), now_s)?;
 
-    println!(
-        "✔ Restored {} file(s). (undo snapshot #{} created — `abox undo` to revert this undo)",
-        applied.len(),
-        undo_id
-    );
-    Ok(())
+    Ok(UndoOutcome {
+        status: UndoStatus::Restored,
+        target_step_id: target_step.id,
+        restored_files: applied.len(),
+        undo_step_id: Some(undo_id),
+        conflict_files: Vec::new(),
+    })
 }
 
 pub fn cmd_cost(by: &str, all: bool) -> Result<()> {

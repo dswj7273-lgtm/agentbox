@@ -1,12 +1,14 @@
 mod adapter;
 mod commands;
 mod db;
+mod export;
 mod guard;
 mod hook;
 mod paths;
 mod pricing;
 mod report;
 mod snapshot;
+mod ui;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -120,6 +122,27 @@ enum Commands {
         #[arg(long)]
         all: bool,
     },
+    /// Export audit timeline in JSONL or OpenTelemetry (OTLP/JSON) format
+    Export {
+        #[arg(long, default_value = "jsonl", value_parser = ["jsonl", "otel"])]
+        format: String,
+        /// Export all sessions for this project
+        #[arg(long)]
+        all: bool,
+        #[arg(long, default_value_t = 500)]
+        limit: usize,
+        /// Write output to file instead of stdout
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Launch local Web UI to browse timeline, inspect diffs, and undo steps
+    Ui {
+        #[arg(long, default_value_t = 4317)]
+        port: u16,
+        /// Do not auto-open browser window
+        #[arg(long)]
+        no_open: bool,
+    },
     /// Prune old sessions and compact shadow git repositories
     Gc {
         #[arg(long, default_value_t = 14)]
@@ -173,6 +196,13 @@ fn main() -> Result<()> {
             html,
         } => report::generate_report(days, dir.as_deref(), json, html.as_deref()),
         Commands::Cost { by, all } => commands::cmd_cost(&by, all),
+        Commands::Export {
+            format,
+            all,
+            limit,
+            out,
+        } => export::cmd_export(&format, all, limit, out.as_deref()),
+        Commands::Ui { port, no_open } => ui::cmd_ui(port, no_open),
         Commands::Gc { days, max_gb } => commands::cmd_gc(days, max_gb),
         Commands::Doctor => commands::cmd_doctor(),
         Commands::Bench { files, iters, repo } => commands::cmd_bench(files, iters, repo),

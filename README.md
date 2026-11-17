@@ -8,7 +8,10 @@ A local flight recorder, safety guard, and step-by-step undo tool for AI coding 
 - **`abox log` / `abox show <step>` / `abox diff <step|a..b>`**: Unified timeline, file-level audit, and unified diffs.
 - **`abox undo [<step>] [--to <step>] [--only <path>] [--force]`**: Restores files (including deleted files from Bash `rm -rf`), detects manual out-of-band modifications before overwriting, and creates a revertible undo snapshot before restoring.
 - **High-Risk Guard (`PreToolUse`)**: Allows in-project operations covered by snapshots while prompting (`ask`) or blocking (`deny`) irreversible/sensitive operations (`git push --force`, `git reset --hard`, `rm -rf` outside project, `DROP TABLE`, `curl | sh`, `.env*`/`~/.ssh` writes), customizable via `~/.agentbox/policy.yaml` and `.agentbox/policy.yaml`.
-- **`abox report` / `abox cost` / `abox gc` / `abox doctor` / `abox bench`**: Zero-hook historical Claude Code log audit card (`--json` / `--html`), branch/session/agent cost summary, GC, diagnostics, and 10k-file latency benchmark.
+- **`abox report` / `abox cost` / `abox export` / `abox ui` / `abox gc` / `abox doctor` / `abox bench`**: Zero-hook historical Claude Code log audit card (`--json` / `--html`), branch/session/agent cost summary, JSONL & OpenTelemetry (`--format otel`) audit export, local Web UI (`abox ui`), GC, diagnostics, and 10k-file latency benchmark.
+
+## License
+Apache-2.0 — see [LICENSE](LICENSE).
 
 ## Build & Verify
 ```bash

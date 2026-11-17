@@ -534,6 +534,17 @@ fn e2e_multi_agent_unified_timeline_claude_codex_gemini() {
     let cost_str = String::from_utf8_lossy(&cost_out.stdout);
     assert!(cost_str.contains("claude") && cost_str.contains("codex") && cost_str.contains("gemini"), "cost={}", cost_str);
 
+    // F10: Export JSONL and OpenTelemetry OTLP/JSON
+    let exp_jsonl = env.run_abox(&["export", "--format", "jsonl", "--all"], None);
+    assert!(exp_jsonl.status.success());
+    let jsonl_str = String::from_utf8_lossy(&exp_jsonl.stdout);
+    assert!(jsonl_str.contains("\"agent\":\"claude\"") && jsonl_str.contains("\"agent\":\"gemini\""));
+
+    let exp_otel = env.run_abox(&["export", "--format", "otel", "--all"], None);
+    assert!(exp_otel.status.success());
+    let otel_str = String::from_utf8_lossy(&exp_otel.stdout);
+    assert!(otel_str.contains("\"resourceSpans\"") && otel_str.contains("agentbox.audit"));
+
     // Uninstall removes all 3 cleanly
     let mut un_cmd = Command::new(abox_bin());
     let un_out = un_cmd
