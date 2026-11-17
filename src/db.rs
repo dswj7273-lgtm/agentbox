@@ -637,7 +637,20 @@ impl Database {
         Ok(out)
     }
 
-    pub fn delete_sessions_older_than(&mut self, cutoff_ts: i64) -> Result<usize> {
+    pub fn delete_sessions_older_than(&mut self, cutoff_ts: i64) -> Result<Vec<(String, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, project_hash FROM sessions WHERE started_at < ?1")?;
+        let targets: Vec<(String, String)> = stmt
+            .query_map(params![cutoff_ts], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+
+        if targets.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let tx = self.conn.transaction()?;
         tx.execute(
             "DELETE FROM step_files WHERE step_id IN (SELECT id FROM steps WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?1))",
@@ -647,9 +660,34 @@ impl Database {
             "DELETE FROM steps WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?1)",
             params![cutoff_ts],
         )?;
-        let count = tx.execute("DELETE FROM sessions WHERE started_at < ?1", params![cutoff_ts])?;
+        tx.execute("DELETE FROM sessions WHERE started_at < ?1", params![cutoff_ts])?;
         tx.commit()?;
-        Ok(count)
+        Ok(targets)
+    }
+
+    pub fn delete_oldest_session(&mut self) -> Result<Option<(String, String)>> {
+        let target: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT id, project_hash FROM sessions ORDER BY started_at ASC LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+
+        let Some((sid, phash)) = target else {
+            return Ok(None);
+        };
+
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM step_files WHERE step_id IN (SELECT id FROM steps WHERE session_id = ?1)",
+            params![&sid],
+        )?;
+        tx.execute("DELETE FROM steps WHERE session_id = ?1", params![&sid])?;
+        tx.execute("DELETE FROM sessions WHERE id = ?1", params![&sid])?;
+        tx.commit()?;
+        Ok(Some((sid, phash)))
     }
 
     pub fn stats_counts(&self) -> Result<(i64, i64, i64)> {

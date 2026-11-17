@@ -416,6 +416,27 @@ fn e2e_diff_show_undo_only_policy_override_and_report() {
     let doc_out = env.run_abox(&["doctor"], None);
     assert!(doc_out.status.success());
     assert!(String::from_utf8_lossy(&doc_out.stdout).contains("Git:"));
+
+    // policy init / list / test & log/show --json & gc
+    let p_init = env.run_abox(&["policy", "init"], None);
+    assert!(p_init.status.success());
+    assert!(env.proj.join(".aboxignore").exists());
+
+    let p_list = env.run_abox(&["policy", "list"], None);
+    assert!(String::from_utf8_lossy(&p_list.stdout).contains("git.force_push"));
+
+    let p_test = env.run_abox(&["policy", "test", "Bash", "git reset --hard"], None);
+    assert!(String::from_utf8_lossy(&p_test.stdout).contains("Decision: ask"));
+
+    let log_json = env.run_abox(&["log", "--all", "--json"], None);
+    assert!(String::from_utf8_lossy(&log_json.stdout).trim_start().starts_with('['));
+
+    let show_json = env.run_abox(&["show", "2", "--json"], None);
+    assert!(String::from_utf8_lossy(&show_json.stdout).contains("\"files\""));
+
+    let gc_out = env.run_abox(&["gc", "--days", "14", "--max-gb", "2"], None);
+    assert!(gc_out.status.success());
+    assert!(String::from_utf8_lossy(&gc_out.stdout).contains("GC complete"));
 }
 
 #[test]

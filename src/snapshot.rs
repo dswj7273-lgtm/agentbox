@@ -585,6 +585,25 @@ fn collect_gitlinks(shadow_repo: &Path, tree_a: &str, tree_b: &str) -> HashSet<S
     out_set
 }
 
+pub fn delete_session_ref(shadow_repo: &Path, session_id: &str) {
+    let sanitized_sess: String = session_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let ref_name = format!("refs/abox/{}", sanitized_sess);
+    let _ = Command::new("git")
+        .arg("--git-dir")
+        .arg(shadow_repo)
+        .args(["update-ref", "-d", &ref_name])
+        .output();
+}
+
 pub fn run_git_gc(shadow_repo: &Path) -> Result<()> {
     let out = Command::new("git")
         .arg("--git-dir")

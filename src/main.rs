@@ -69,11 +69,17 @@ enum Commands {
         /// Max number of steps to display
         #[arg(long, default_value_t = 50)]
         limit: usize,
+        /// Output JSON array instead of table
+        #[arg(long)]
+        json: bool,
     },
     /// Show detailed metadata and changed files for a step
     Show {
         /// Step ID (# from `abox log`)
         step: i64,
+        /// Output JSON instead of formatted text
+        #[arg(long)]
+        json: bool,
     },
     /// Show diff for a step (`43`) or step range (`40..44`)
     Diff {
@@ -163,6 +169,11 @@ enum Commands {
         #[arg(long, default_value_t = 2.0)]
         max_gb: f64,
     },
+    /// Inspect, initialize, or dry-run Guard policy rules
+    Policy {
+        #[command(subcommand)]
+        action: PolicyAction,
+    },
     /// Check installation, git, hooks, database health, and error logs
     Doctor,
     /// Run M0 shadow-git snapshot latency benchmark
@@ -173,6 +184,24 @@ enum Commands {
         iters: usize,
         #[arg(long)]
         repo: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum PolicyAction {
+    /// Generate .agentbox/policy.yaml and .aboxignore templates in current project
+    Init {
+        #[arg(long)]
+        force: bool,
+    },
+    /// List active merged Guard rules
+    List,
+    /// Dry-run Guard evaluation against a tool and command/path
+    Test {
+        /// Tool name (e.g., Bash, Write, Edit)
+        tool: String,
+        /// Command string (for Bash) or file path (for Write/Edit)
+        target: String,
     },
 }
 
@@ -192,8 +221,9 @@ fn main() -> Result<()> {
             since,
             file,
             limit,
-        } => commands::cmd_log(all, agent, since, file, limit),
-        Commands::Show { step } => commands::cmd_show(step),
+            json,
+        } => commands::cmd_log(all, agent, since, file, limit, json),
+        Commands::Show { step, json } => commands::cmd_show(step, json),
         Commands::Diff { target, patch } => commands::cmd_diff(&target, patch),
         Commands::Undo {
             step,
@@ -222,6 +252,11 @@ fn main() -> Result<()> {
             cycles,
         } => watch::cmd_watch(&agent, interval_ms, cycles),
         Commands::Gc { days, max_gb } => commands::cmd_gc(days, max_gb),
+        Commands::Policy { action } => match action {
+            PolicyAction::Init { force } => commands::cmd_policy_init(force),
+            PolicyAction::List => commands::cmd_policy_list(),
+            PolicyAction::Test { tool, target } => commands::cmd_policy_test(&tool, &target),
+        },
         Commands::Doctor => commands::cmd_doctor(),
         Commands::Bench { files, iters, repo } => commands::cmd_bench(files, iters, repo),
     }

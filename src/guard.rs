@@ -91,6 +91,14 @@ pub struct GuardVerdict {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct RuleSummary {
+    pub id: String,
+    pub tools: Vec<String>,
+    pub action: Decision,
+    pub reason: String,
+}
+
 pub struct GuardEngine {
     rules: Vec<CompiledRule>,
 }
@@ -122,6 +130,18 @@ impl GuardEngine {
             .collect();
 
         Self { rules: compiled }
+    }
+
+    pub fn list_rules(&self) -> Vec<RuleSummary> {
+        self.rules
+            .iter()
+            .map(|r| RuleSummary {
+                id: r.id.clone(),
+                tools: r.tools.clone(),
+                action: r.action,
+                reason: r.reason.clone(),
+            })
+            .collect()
     }
 
     pub fn evaluate(
@@ -635,6 +655,31 @@ fn command_targets_outside_project(sub_cmd: &str, project_root: &Path) -> bool {
         }
     }
     false
+}
+
+pub fn default_policy_template() -> &'static str {
+    r#"# AgentBox Guard Policy (.agentbox/policy.yaml)
+# Actions: allow | ask | deny
+# Matching rule IDs override built-in rules; new IDs are appended.
+rules:
+  - id: git.force_push
+    match:
+      tool: [Bash, run_shell_command, shell_command, exec_command]
+      command: '\bgit\s+push\b.*(\s-f\b|\s--force\b|\s--force-with-lease\b)'
+    action: ask
+    reason: "`git push --force` alters remote history and is irreversible via local snapshots."
+
+  - id: secrets.write
+    match:
+      tool: [Edit, Write, MultiEdit, NotebookEdit, write_file, edit_file]
+      path:
+        - "**/.env"
+        - "**/.env.*"
+        - "**/.ssh/**"
+        - "**/.aws/**"
+    action: deny
+    reason: "Writing to secret files is blocked by project policy."
+"#
 }
 
 /// Redact common API keys / tokens from JSON before storing in SQLite (§9 Privacy).

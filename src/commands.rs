@@ -5,10 +5,11 @@ use crate::paths::{
 };
 use crate::report::format_tokens;
 use crate::snapshot::{
-    capture_snapshot, capture_snapshot_with_mode, detect_external_modifications, diff_patch,
-    diff_trees, dir_size_bytes, ensure_shadow_repo, restore_to_tree, run_git_gc, ProjectLock,
-    SnapshotMode,
+    capture_snapshot, capture_snapshot_with_mode, delete_session_ref,
+    detect_external_modifications, diff_patch, diff_trees, dir_size_bytes, ensure_shadow_repo,
+    restore_to_tree, run_git_gc, ProjectLock, SnapshotMode,
 };
+use crate::guard::{default_policy_template, GuardEngine};
 use anyhow::{Context, Result};
 use chrono::{Local, TimeZone};
 use std::io::{IsTerminal, Write};
@@ -127,10 +128,15 @@ pub fn cmd_log(
     since: Option<String>,
     file: Option<String>,
     limit: usize,
+    json_out: bool,
 ) -> Result<()> {
     let paths = AgentBoxPaths::resolve()?;
     if !paths.db_path().exists() {
-        println!("No AgentBox history yet. Run `abox init` first.");
+        if json_out {
+            println!("[]");
+        } else {
+            println!("No AgentBox history yet. Run `abox init` first.");
+        }
         return Ok(());
     }
     let db = Database::open(&paths.db_path())?;
@@ -150,6 +156,10 @@ pub fn cmd_log(
     };
 
     let steps = db.query_steps(&filter)?;
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&steps)?);
+        return Ok(());
+    }
     if steps.is_empty() {
         println!("No recorded steps for {}.", project_root.display());
         return Ok(());
@@ -218,13 +228,22 @@ pub fn cmd_log(
     Ok(())
 }
 
-pub fn cmd_show(step_id: i64) -> Result<()> {
+pub fn cmd_show(step_id: i64, json_out: bool) -> Result<()> {
     let paths = AgentBoxPaths::resolve()?;
     let db = Database::open(&paths.db_path())?;
     let step = db
         .get_step(step_id)?
         .with_context(|| format!("Step #{} not found", step_id))?;
     let files = db.get_step_files(step_id)?;
+
+    if json_out {
+        let out = serde_json::json!({
+            "step": step,
+            "files": files
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
 
     let time_str = Local
         .timestamp_opt(step.started_at, 0)
@@ -598,32 +617,138 @@ pub fn cmd_gc(days: u64, max_gb: f64) -> Result<()> {
     }
     let mut db = Database::open(&paths.db_path())?;
     let cutoff = chrono::Utc::now().timestamp() - (days as i64 * 86400);
-    let deleted = db.delete_sessions_older_than(cutoff)?;
-
-    let mut repos_cleaned = 0usize;
-    if paths.repos_dir().exists() {
-        for entry in std::fs::read_dir(paths.repos_dir())? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                if run_git_gc(&entry.path()).is_ok() {
-                    repos_cleaned += 1;
-                }
-            }
+    let deleted_sessions = db.delete_sessions_older_than(cutoff)?;
+    let mut deleted_count = deleted_sessions.len();
+    for (sid, phash) in &deleted_sessions {
+        let repo = paths.shadow_repo_dir(phash);
+        if repo.exists() {
+            delete_session_ref(&repo, sid);
         }
     }
 
-    let total_bytes = dir_size_bytes(&paths.home_dir);
+    let mut repos_cleaned = compact_all_shadow_repos(&paths)?;
+
     let max_bytes = (max_gb * 1024.0 * 1024.0 * 1024.0) as u64;
+    let mut total_bytes = dir_size_bytes(&paths.home_dir);
+
+    // Enforce storage cap by pruning oldest sessions if still over limit
+    while total_bytes > max_bytes {
+        let Some((sid, phash)) = db.delete_oldest_session()? else {
+            break;
+        };
+        deleted_count += 1;
+        let repo = paths.shadow_repo_dir(&phash);
+        if repo.exists() {
+            delete_session_ref(&repo, &sid);
+            let _ = run_git_gc(&repo);
+        }
+        total_bytes = dir_size_bytes(&paths.home_dir);
+    }
+    if deleted_count > deleted_sessions.len() {
+        repos_cleaned = compact_all_shadow_repos(&paths)?;
+        total_bytes = dir_size_bytes(&paths.home_dir);
+    }
+
     println!(
-        "✔ GC complete: pruned {} old session(s), compacted {} shadow repo(s), total storage {:.2} MB (limit {:.1} GB)",
-        deleted,
+        "✔ GC complete: pruned {} session(s), compacted {} shadow repo(s), total storage {:.2} MB (limit {:.2} GB)",
+        deleted_count,
         repos_cleaned,
         total_bytes as f64 / (1024.0 * 1024.0),
         max_gb
     );
-    if total_bytes > max_bytes {
-        println!("⚠ Storage still exceeds {:.1} GB; run `abox gc --days 3` to prune more aggressively.", max_gb);
+    Ok(())
+}
+
+fn compact_all_shadow_repos(paths: &AgentBoxPaths) -> Result<usize> {
+    let mut repos_cleaned = 0usize;
+    if paths.repos_dir().exists() {
+        for entry in std::fs::read_dir(paths.repos_dir())? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() && run_git_gc(&entry.path()).is_ok() {
+                repos_cleaned += 1;
+            }
+        }
     }
+    Ok(repos_cleaned)
+}
+
+pub fn cmd_policy_init(force: bool) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let project_root = resolve_project_root(&cwd);
+    let policy_dir = project_root.join(".agentbox");
+    std::fs::create_dir_all(&policy_dir)?;
+    let policy_path = policy_dir.join("policy.yaml");
+
+    if policy_path.exists() && !force {
+        println!(
+            "Policy already exists at {} (use --force to overwrite).",
+            policy_path.display()
+        );
+    } else {
+        std::fs::write(&policy_path, default_policy_template())?;
+        println!("✔ Created policy template -> {}", policy_path.display());
+    }
+
+    let aboxignore = project_root.join(".aboxignore");
+    if !aboxignore.exists() {
+        std::fs::write(
+            &aboxignore,
+            "# Extra patterns excluded from AgentBox shadow snapshots\n*.log\n*.sqlite\n",
+        )?;
+        println!("✔ Created ignore template -> {}", aboxignore.display());
+    }
+    Ok(())
+}
+
+pub fn cmd_policy_list() -> Result<()> {
+    let paths = AgentBoxPaths::resolve()?;
+    let cwd = std::env::current_dir()?;
+    let project_root = resolve_project_root(&cwd);
+    let gp = paths.global_policy_path();
+    let pp = project_root.join(".agentbox/policy.yaml");
+    let engine = GuardEngine::load(gp.exists().then_some(gp.as_path()), pp.exists().then_some(pp.as_path()));
+
+    println!(" {:<28} {:<8} {:<30}", "RULE ID", "ACTION", "TOOLS");
+    for r in engine.list_rules() {
+        let tools = if r.tools.is_empty() {
+            "*".to_string()
+        } else {
+            r.tools.join(",")
+        };
+        println!(
+            " {:<28} {:<8} {}",
+            pad_or_truncate(&r.id, 28),
+            r.action.as_str(),
+            pad_or_truncate(&tools, 36)
+        );
+    }
+    Ok(())
+}
+
+pub fn cmd_policy_test(tool: &str, target: &str) -> Result<()> {
+    let paths = AgentBoxPaths::resolve()?;
+    let cwd = std::env::current_dir()?;
+    let project_root = resolve_project_root(&cwd);
+    let gp = paths.global_policy_path();
+    let pp = project_root.join(".agentbox/policy.yaml");
+    let engine = GuardEngine::load(gp.exists().then_some(gp.as_path()), pp.exists().then_some(pp.as_path()));
+
+    let input = if matches!(
+        tool,
+        "Bash" | "run_shell_command" | "shell_command" | "exec_command"
+    ) {
+        serde_json::json!({ "command": target })
+    } else {
+        serde_json::json!({ "file_path": target })
+    };
+
+    let verdict = engine.evaluate(tool, &input, &project_root, &[]);
+    println!(
+        "Decision: {}\nRule:     {}\nReason:   {}",
+        verdict.decision.as_str(),
+        verdict.rule_id.as_deref().unwrap_or("-"),
+        verdict.reason.as_deref().unwrap_or("(allowed)")
+    );
     Ok(())
 }
 
