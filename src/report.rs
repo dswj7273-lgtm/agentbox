@@ -152,11 +152,30 @@ pub fn generate_report(
 
         let mut sess_risky = 0usize;
         for cmd in &m.shell_commands {
-            if let Some(rule) = guard.is_high_risk_command(cmd, &proj_path) {
+            // Check sub-commands individually so compound commands highlight the exact risky segment
+            let subs = crate::guard::split_shell_commands(cmd);
+            let mut matched_rule: Option<(String, String)> = None;
+            for sub in subs.iter().rev() {
+                if let Some(rule) = guard.is_high_risk_command(sub, &proj_path) {
+                    matched_rule = Some((rule, sub.clone()));
+                    break;
+                }
+            }
+            if matched_rule.is_none() {
+                if let Some(rule) = guard.is_high_risk_command(cmd, &proj_path) {
+                    matched_rule = Some((rule, cmd.clone()));
+                }
+            }
+            if let Some((rule, snippet)) = matched_rule {
                 sess_risky += 1;
                 if risky_examples.len() < 5 {
-                    let short: String = cmd.replace('\n', " ").chars().take(64).collect();
-                    risky_examples.push(format!("[{}] {}", rule, short));
+                    let clean: String = snippet
+                        .replace('\n', " ")
+                        .chars()
+                        .filter(|c| c.is_ascii())
+                        .take(58)
+                        .collect();
+                    risky_examples.push(format!("[{}] {}", rule, clean));
                 }
             }
         }
@@ -239,6 +258,17 @@ pub fn generate_report(
     Ok(())
 }
 
+fn print_box_line(content: &str) {
+    const INNER_WIDTH: usize = 65;
+    let char_len = content.chars().count();
+    if char_len >= INNER_WIDTH {
+        let truncated: String = content.chars().take(INNER_WIDTH).collect();
+        println!("│{}│", truncated);
+    } else {
+        println!("│{}{}│", content, " ".repeat(INNER_WIDTH - char_len));
+    }
+}
+
 fn print_terminal_card(r: &AuditReport) {
     let total_tokens = r.total_input_tokens + r.total_output_tokens + r.total_cache_tokens;
     let agents_str = if r.agents_found.is_empty() {
@@ -247,35 +277,35 @@ fn print_terminal_card(r: &AuditReport) {
         r.agents_found.join(", ")
     };
     println!("╭─────────────────────────────────────────────────────────────────╮");
-    println!(
-        "│  AgentBox Audit Report (Last {:>2} days · {:<22})│",
+    print_box_line(&format!(
+        "  AgentBox Audit Report (Last {} days · {})",
         r.days,
-        agents_str.chars().take(22).collect::<String>()
-    );
+        agents_str.chars().take(24).collect::<String>()
+    ));
     println!("├─────────────────────────────────────────────────────────────────┤");
-    println!(
-        "│  Sessions:       {:<10}   Est. API Equiv: ${:<12.2}   │",
+    print_box_line(&format!(
+        "  Sessions:       {:<10}   Est. API Equiv: ${:.2}",
         r.sessions_count, r.total_cost_usd
-    );
-    println!(
-        "│  Shell Commands: {:<10}   High-Risk Cmds: {:<14}  │",
+    ));
+    print_box_line(&format!(
+        "  Shell Commands: {:<10}   High-Risk Cmds: {}",
         r.total_shell_commands, r.high_risk_commands
-    );
-    println!(
-        "│  Edited Files*:  {:<10}   Total Tokens:   {:<14}  │",
+    ));
+    print_box_line(&format!(
+        "  Edited Files*:  {:<10}   Total Tokens:   {}",
         r.unique_edited_files,
         format_tokens(total_tokens)
-    );
+    ));
     println!("├─────────────────────────────────────────────────────────────────┤");
-    println!("│  Top 5 Most Expensive Sessions                                  │");
+    print_box_line("  Top 5 Most Expensive Sessions");
     if r.top_sessions.is_empty() {
-        println!("│   (no sessions with token data found)                           │");
+        print_box_line("   (no sessions with token data found)");
     } else {
         for (i, s) in r.top_sessions.iter().enumerate() {
             let sid: String = s.session_id.chars().take(8).collect();
             let proj: String = s.project.chars().take(12).collect();
-            println!(
-                "│  {}. {:<6} {:<8} {:<12} {:>4} bash {:>7} ${:>6.2} │",
+            print_box_line(&format!(
+                "  {}. {:<6} {:<8} {:<12} {:>4} bash {:>7} ${:>7.2}",
                 i + 1,
                 s.agent,
                 sid,
@@ -283,15 +313,15 @@ fn print_terminal_card(r: &AuditReport) {
                 s.shell_commands,
                 format_tokens(s.total_tokens),
                 s.cost_usd
-            );
+            ));
         }
     }
     if !r.risky_examples.is_empty() {
         println!("├─────────────────────────────────────────────────────────────────┤");
-        println!("│  Sample High-Risk Shell Commands Detected                       │");
+        print_box_line("  Sample High-Risk Shell Commands Detected");
         for ex in &r.risky_examples {
-            let trimmed: String = ex.chars().take(61).collect();
-            println!("│  ⚠ {:<61}│", trimmed);
+            let trimmed: String = ex.chars().take(60).collect();
+            print_box_line(&format!("  ! {}", trimmed));
         }
     }
     println!("╰─────────────────────────────────────────────────────────────────╯");
