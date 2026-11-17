@@ -41,9 +41,16 @@ pub struct AuditReport {
 pub fn generate_report(
     days: u64,
     custom_dir: Option<&Path>,
+    project_filter: Option<&Path>,
     json_out: bool,
     html_path: Option<&Path>,
 ) -> Result<()> {
+    let canonical_filter = project_filter.map(|p| {
+        std::fs::canonicalize(p)
+            .unwrap_or_else(|_| p.to_path_buf())
+            .to_string_lossy()
+            .to_string()
+    });
     let cutoff_ts = chrono::Utc::now().timestamp() - (days as i64 * 86400);
     let mut sources: Vec<(&'static str, PathBuf)> = Vec::new();
 
@@ -129,13 +136,19 @@ pub fn generate_report(
                 continue;
             }
         }
-        agents_set.insert((*agent_kind).to_string());
-
         let proj_path = m
             .project_cwd
             .as_deref()
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
+
+        if let Some(ref pf) = canonical_filter {
+            let cwd_str = proj_path.to_string_lossy();
+            if !cwd_str.starts_with(pf.as_str()) {
+                continue;
+            }
+        }
+        agents_set.insert((*agent_kind).to_string());
 
         let mut sess_risky = 0usize;
         for cmd in &m.shell_commands {

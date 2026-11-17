@@ -142,6 +142,9 @@ enum Commands {
         /// Custom directory containing agent JSONL logs
         #[arg(long)]
         dir: Option<PathBuf>,
+        /// Filter report to sessions under a specific project directory
+        #[arg(long)]
+        project: Option<PathBuf>,
         /// Output JSON instead of terminal card
         #[arg(long)]
         json: bool,
@@ -285,9 +288,10 @@ fn main() -> Result<()> {
         Commands::Report {
             days,
             dir,
+            project,
             json,
             html,
-        } => report::generate_report(days, dir.as_deref(), json, html.as_deref()),
+        } => report::generate_report(days, dir.as_deref(), project.as_deref(), json, html.as_deref()),
         Commands::Cost { by, all } => commands::cmd_cost(&by, all),
         Commands::Export {
             format,

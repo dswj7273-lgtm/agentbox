@@ -436,6 +436,19 @@ fn e2e_diff_show_undo_only_policy_override_and_report() {
     assert!(rep_json.contains("\"sessions_count\": 2"), "rep={}", rep_json);
     assert!(html_file.exists());
 
+    // Filter report by --project /tmp/other -> 0 sessions
+    let mut rep_filtered = Command::new(abox_bin());
+    let rf_out = rep_filtered
+        .current_dir(&env.proj)
+        .env("AGENTBOX_HOME", &env.abox_home)
+        .env("AGENTBOX_CLAUDE_HOME", &env.claude_home)
+        .env("AGENTBOX_CODEX_HOME", env.root.join("codex_rep_home"))
+        .env("AGENTBOX_GEMINI_HOME", env.root.join("gemini_rep_home"))
+        .args(["report", "--days", "30", "--project", "/tmp/other-proj", "--json"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&rf_out.stdout).contains("\"sessions_count\": 0"));
+
     // doctor
     let doc_out = env.run_abox(&["doctor"], None);
     assert!(doc_out.status.success());
