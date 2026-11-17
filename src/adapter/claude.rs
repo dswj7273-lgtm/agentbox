@@ -353,6 +353,7 @@ pub fn parse_claude_transcript(path: &Path) -> Result<TranscriptMetrics> {
         output: i64,
         cache_write: i64,
         cache_read: i64,
+        tool_ids: Vec<String>,
     }
 
     let mut seen_uuids: HashSet<String> = HashSet::new();
@@ -407,13 +408,14 @@ pub fn parse_claude_transcript(path: &Path) -> Result<TranscriptMetrics> {
             }
         }
 
+        let msg_id = msg
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("line-{}", line_idx));
+
         // Token usage deduplicated by message.id (streaming snapshots reuse same message.id; keep max/latest)
         if let Some(usage) = msg.get("usage") {
-            let msg_id = msg
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("line-{}", line_idx));
             let model = msg
                 .get("model")
                 .and_then(|v| v.as_str())
@@ -437,7 +439,7 @@ pub fn parse_claude_transcript(path: &Path) -> Result<TranscriptMetrics> {
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
 
-            let entry = msg_usages.entry(msg_id).or_default();
+            let entry = msg_usages.entry(msg_id.clone()).or_default();
             entry.model = model;
             entry.input = entry.input.max(input);
             entry.output = entry.output.max(output);
@@ -452,6 +454,11 @@ pub fn parse_claude_transcript(path: &Path) -> Result<TranscriptMetrics> {
                     continue;
                 }
                 if let Some(tid) = block.get("id").and_then(|v| v.as_str()) {
+                    if let Some(entry) = msg_usages.get_mut(&msg_id) {
+                        if !entry.tool_ids.iter().any(|x| x == tid) {
+                            entry.tool_ids.push(tid.to_string());
+                        }
+                    }
                     if !seen_tool_ids.insert(tid.to_string()) {
                         continue;
                     }
@@ -484,13 +491,24 @@ pub fn parse_claude_transcript(path: &Path) -> Result<TranscriptMetrics> {
         metrics.output_tokens += usage.output;
         metrics.cache_write_tokens += usage.cache_write;
         metrics.cache_read_tokens += usage.cache_read;
-        metrics.cost_usd += estimate_cost_usd(
+        let msg_cost = estimate_cost_usd(
             &usage.model,
             usage.input,
             usage.output,
             usage.cache_write,
             usage.cache_read,
         );
+        metrics.cost_usd += msg_cost;
+
+        if !usage.tool_ids.is_empty() {
+            let n = usage.tool_ids.len() as i64;
+            let total_tok = usage.input + usage.output + usage.cache_write + usage.cache_read;
+            let per_tok = total_tok / n;
+            let per_cost = msg_cost / (n as f64);
+            for tid in &usage.tool_ids {
+                metrics.tool_costs.insert(tid.clone(), (per_tok, per_cost));
+            }
+        }
     }
     metrics.edited_files = edited_set.into_iter().collect();
     metrics.edited_files.sort();

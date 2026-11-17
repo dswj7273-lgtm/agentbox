@@ -287,6 +287,28 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_step_costs_by_tool_use_id(
+        &mut self,
+        session_id: &str,
+        tool_costs: &std::collections::HashMap<String, (i64, f64)>,
+    ) -> Result<usize> {
+        if tool_costs.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction()?;
+        let mut updated = 0usize;
+        {
+            let mut stmt = tx.prepare(
+                "UPDATE steps SET tokens = ?1, cost_usd = ?2 WHERE session_id = ?3 AND tool_use_id = ?4",
+            )?;
+            for (tid, (toks, cost)) in tool_costs {
+                updated += stmt.execute(params![toks, cost, session_id, tid])?;
+            }
+        }
+        tx.commit()?;
+        Ok(updated)
+    }
+
     pub fn record_inflight_start(
         &self,
         tool_use_id: &str,

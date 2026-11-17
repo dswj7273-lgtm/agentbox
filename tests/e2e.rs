@@ -357,6 +357,27 @@ fn e2e_diff_show_undo_only_policy_override_and_report() {
     .to_string();
     env.run_abox(&["hook", "claude"], Some(&post));
 
+    // Simulate Stop hook with transcript_path to verify per-step & session cost backfill
+    let transcript = env.root.join("sess-extra.jsonl");
+    fs::write(
+        &transcript,
+        r#"{"type":"assistant","uuid":"u-ex","sessionId":"sess-extra","cwd":"/tmp","timestamp":"2026-11-17T02:00:00Z","message":{"id":"m-ex","model":"claude-sonnet-4-5","content":[{"type":"tool_use","id":"tu-both","name":"Bash","input":{"command":"edit both files"}}],"usage":{"input_tokens":10000,"output_tokens":2000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}"#,
+    )
+    .unwrap();
+    let stop_evt = serde_json::json!({
+        "hook_event_name": "Stop",
+        "session_id": "sess-extra",
+        "cwd": env.proj.to_string_lossy(),
+        "transcript_path": transcript.to_string_lossy()
+    })
+    .to_string();
+    env.run_abox(&["hook", "claude"], Some(&stop_evt));
+
+    // Verify `abox log` displays backfilled per-step cost ($0.06)
+    let log_cost = env.run_abox(&["log"], None);
+    let log_cost_str = String::from_utf8_lossy(&log_cost.stdout);
+    assert!(log_cost_str.contains("$0.06"), "expected $0.06 in log, got:\n{}", log_cost_str);
+
     // Verify `abox show 2` and `abox diff 2 --patch`
     let show_out = env.run_abox(&["show", "2"], None);
     let show_str = String::from_utf8_lossy(&show_out.stdout);

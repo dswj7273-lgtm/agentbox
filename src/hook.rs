@@ -264,14 +264,14 @@ pub fn handle_hook_inner(
             Ok(None)
         }
         HookEventKind::Stop | HookEventKind::SessionEnd => {
-            enrich_session_from_transcript(&db, &event, now_s)?;
+            enrich_session_from_transcript(&mut db, &event, now_s)?;
             Ok(None)
         }
     }
 }
 
 fn enrich_session_from_transcript(
-    db: &Database,
+    db: &mut Database,
     event: &NormalizedHookEvent,
     now_s: i64,
 ) -> Result<()> {
@@ -293,6 +293,7 @@ fn enrich_session_from_transcript(
                     cache_total,
                     metrics.cost_usd,
                 )?;
+                let _ = db.update_step_costs_by_tool_use_id(&event.session_id, &metrics.tool_costs);
                 return Ok(());
             }
         }

@@ -166,8 +166,8 @@ pub fn cmd_log(
     }
 
     println!(
-        " {:<4} {:<8} {:<7} {:<8} {:<36} {:>5}  {:<8}",
-        "#", "TIME", "AGENT", "TOOL", "SUMMARY", "FILES", "STATUS"
+        " {:<4} {:<8} {:<7} {:<8} {:<34} {:>5}  {:<7} {:>6}",
+        "#", "TIME", "AGENT", "TOOL", "SUMMARY", "FILES", "STATUS", "COST"
     );
 
     let mut total_files = 0i64;
@@ -182,7 +182,7 @@ pub fn cmd_log(
         if s.concurrent_overlap {
             summary.push_str(" [concurrent]");
         }
-        let summary_col = pad_or_truncate(&summary, 36);
+        let summary_col = pad_or_truncate(&summary, 34);
 
         let status = match s.guard_decision.as_deref() {
             Some("deny") => "DENIED".to_string(),
@@ -199,16 +199,23 @@ pub fn cmd_log(
             },
         };
 
+        let cost_col = if s.cost_usd > 0.0001 {
+            format!("${:.2}", s.cost_usd)
+        } else {
+            "-".to_string()
+        };
+
         total_files += s.files_changed;
         println!(
-            " {:<4} {:<8} {:<7} {:<8} {} {:>5}  {:<8}",
+            " {:<4} {:<8} {:<7} {:<8} {} {:>5}  {:<7} {:>6}",
             s.id,
             time_str,
             pad_or_truncate(&s.agent, 7),
             pad_or_truncate(&s.tool, 8),
             summary_col,
             s.files_changed,
-            status
+            status,
+            cost_col
         );
     }
 

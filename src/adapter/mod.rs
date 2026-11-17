@@ -4,6 +4,7 @@ pub mod gemini;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +52,8 @@ pub struct TranscriptMetrics {
     pub started_at: Option<i64>,
     pub ended_at: Option<i64>,
     pub project_cwd: Option<String>,
+    #[serde(default)]
+    pub tool_costs: HashMap<String, (i64, f64)>,
 }
 
 #[derive(Debug, Clone)]

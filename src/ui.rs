@@ -276,6 +276,7 @@ async function selectStep(id) {
       <div class="pill">Summary: <code>${esc(s.input_summary)}</code></div>
       <div class="pill">Guard: ${esc(s.guard_decision || 'allow')}</div>
       <div class="pill">Exit: ${s.exit_status ?? '-'}</div>
+      <div class="pill">Cost: $${(s.cost_usd || 0).toFixed(3)}</div>
     </div>
     ${files ? `<ul>${files}</ul>` : '<p style="color:#9ca3af">No filesystem changes.</p>'}
     <pre class="diff">${colorDiff(d.patch || '(no diff)')}</pre>
