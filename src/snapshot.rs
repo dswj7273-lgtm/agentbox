@@ -41,6 +41,7 @@ impl ProjectLock {
             .create(true)
             .read(true)
             .write(true)
+            .truncate(false)
             .open(lock_path)
             .with_context(|| format!("Failed to open lock file {}", lock_path.display()))?;
         file.lock_exclusive()
@@ -160,12 +161,14 @@ pub fn sync_excludes(project_root: &Path, shadow_repo: &Path) -> Result<()> {
 
 /// Scan workspace for files > 20MB and nested git repos (skipping common build/VCS dirs)
 /// and add them to `<shadow_repo>/info/exclude` so git never hashes huge binaries or fails on unborn nested repos.
+/// For large repositories (>= 15,000 tracked files) on macOS/Windows, automatically enables `core.fsmonitor`.
 pub fn scan_and_exclude_large_files(
     project_root: &Path,
     shadow_repo: &Path,
 ) -> Result<Vec<String>> {
     let mut large_files = Vec::new();
     let mut nested_repos = Vec::new();
+    let mut scanned_files = 0usize;
     let skip_dirs: HashSet<&str> = [
         ".git",
         "node_modules",
@@ -207,6 +210,7 @@ pub fn scan_and_exclude_large_files(
 
     for entry in walker.flatten() {
         if entry.file_type().is_file() {
+            scanned_files += 1;
             if let Ok(meta) = entry.metadata() {
                 if meta.len() > MAX_FILE_BYTES {
                     if let Ok(rel) = entry.path().strip_prefix(project_root) {
@@ -215,6 +219,17 @@ pub fn scan_and_exclude_large_files(
                 }
             }
         }
+    }
+
+    if scanned_files >= 15_000
+        && cfg!(any(target_os = "macos", target_os = "windows"))
+        && std::env::var("AGENTBOX_FSMONITOR").as_deref() != Ok("0")
+    {
+        let _ = Command::new("git")
+            .arg("--git-dir")
+            .arg(shadow_repo)
+            .args(["config", "core.fsmonitor", "true"])
+            .output();
     }
 
     let exclude_path = shadow_repo.join("info").join("exclude");

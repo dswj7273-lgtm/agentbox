@@ -318,6 +318,7 @@ impl Database {
         Ok(updated)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_inflight_start(
         &self,
         tool_use_id: &str,

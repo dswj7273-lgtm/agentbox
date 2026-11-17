@@ -113,11 +113,9 @@ pub fn cmd_uninstall(project_scope: bool, global_scope: bool, purge: bool) -> Re
         }
     }
 
-    if purge {
-        if paths.home_dir.exists() {
-            std::fs::remove_dir_all(&paths.home_dir)?;
-            println!("✔ Purged AgentBox data directory: {}", paths.home_dir.display());
-        }
+    if purge && paths.home_dir.exists() {
+        std::fs::remove_dir_all(&paths.home_dir)?;
+        println!("✔ Purged AgentBox data directory: {}", paths.home_dir.display());
     }
     Ok(())
 }
@@ -782,7 +780,7 @@ pub fn cmd_policy_list() -> Result<()> {
     let pp = project_root.join(".agentbox/policy.yaml");
     let engine = GuardEngine::load(gp.exists().then_some(gp.as_path()), pp.exists().then_some(pp.as_path()));
 
-    println!(" {:<24} {:<8} {:<24} {}", "RULE ID", "ACTION", "TOOLS", "REASON");
+    println!(" {:<24} {:<8} {:<24} REASON", "RULE ID", "ACTION", "TOOLS");
     for r in engine.list_rules() {
         let tools = if r.tools.is_empty() {
             "*".to_string()
@@ -844,7 +842,7 @@ pub fn cmd_checkpoint(name: Option<String>, list: bool) -> Result<()> {
             println!("No checkpoints yet for {}. Create one with `abox checkpoint <name>`.", project_root.display());
             return Ok(());
         }
-        println!(" {:<24} {:<10} {}", "NAME", "TREE", "CREATED");
+        println!(" {:<24} {:<10} CREATED", "NAME", "TREE");
         for (n, tree, ts) in cps {
             let tstr = Local
                 .timestamp_opt(ts, 0)
