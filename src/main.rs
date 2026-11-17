@@ -36,6 +36,9 @@ enum Commands {
         /// Install hooks globally (~/.claude/settings.json)
         #[arg(long)]
         global: bool,
+        /// Only install hooks for a specific agent (claude, codex, gemini, opencode)
+        #[arg(long)]
+        agent: Option<String>,
     },
     /// Remove AgentBox hooks cleanly
     Uninstall {
@@ -122,6 +125,8 @@ enum Commands {
     },
     /// Show AgentBox hook, snapshot, and workspace status for the current project
     Status,
+    /// List all repositories tracked by AgentBox with step counts and shadow storage size
+    Projects,
     /// Scan historical local agent logs (no hooks needed) and print audit summary
     Report {
         /// Lookback window in days
@@ -224,7 +229,11 @@ enum PolicyAction {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Init { project, global } => commands::cmd_init(project, global),
+        Commands::Init {
+            project,
+            global,
+            agent,
+        } => commands::cmd_init(project, global, agent),
         Commands::Uninstall {
             project,
             global,
@@ -252,6 +261,7 @@ fn main() -> Result<()> {
         } => commands::cmd_undo(step, to, to_tag, only, force, yes, dry_run),
         Commands::Checkpoint { name, list } => commands::cmd_checkpoint(name, list),
         Commands::Status => commands::cmd_status(),
+        Commands::Projects => commands::cmd_projects(),
         Commands::Report {
             days,
             dir,

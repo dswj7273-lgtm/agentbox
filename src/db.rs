@@ -781,6 +781,23 @@ impl Database {
         )?;
         Ok(c)
     }
+
+    pub fn list_projects(&self) -> Result<Vec<(String, String, i64, i64)>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT p.hash, p.root_path, p.updated_at,
+                   COALESCE((SELECT COUNT(*) FROM steps s JOIN sessions sess ON sess.id = s.session_id WHERE sess.project_hash = p.hash), 0)
+            FROM projects p
+            ORDER BY p.updated_at DESC
+            "#,
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
 }
 
 #[derive(Debug, Clone)]

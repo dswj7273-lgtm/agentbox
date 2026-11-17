@@ -16,7 +16,7 @@ use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 
-pub fn cmd_init(project_scope: bool, global_scope: bool) -> Result<()> {
+pub fn cmd_init(project_scope: bool, global_scope: bool, only_agent: Option<String>) -> Result<()> {
     let paths = AgentBoxPaths::resolve()?;
     paths.ensure_dirs()?;
     let _ = Database::open(&paths.db_path())?;
@@ -34,15 +34,20 @@ pub fn cmd_init(project_scope: bool, global_scope: bool) -> Result<()> {
     };
 
     let adapters = all_adapters();
-    let mut detected = Vec::new();
     let mut installed_any = false;
 
     for adapter in &adapters {
-        if let Some(ver) = adapter.detect() {
-            detected.push(format!("{} ({})", adapter.name(), ver));
+        if let Some(ref target_agent) = only_agent {
+            if adapter.name() != target_agent {
+                continue;
+            }
+        }
+        let detected = adapter.detect();
+        if detected.is_some() || only_agent.is_some() {
+            let ver_label = detected.unwrap_or_else(|| "explicitly selected".to_string());
             let report = adapter.install_hooks(scope, &project_root, &abox_bin)?;
             installed_any = true;
-            println!("✔ Detected: {}", detected.last().unwrap());
+            println!("✔ Detected: {} ({})", adapter.name(), ver_label);
             if let Some(bak) = report.backup_path {
                 println!(
                     "✔ Hooks installed → {} (backup: {})",
@@ -299,7 +304,13 @@ pub fn cmd_diff(target: &str, patch_only: bool) -> Result<()> {
     let proj_hash = project_hash(&project_root);
     let shadow_repo = paths.shadow_repo_dir(&proj_hash);
 
-    let (tree_a, tree_b, label) = if let Some((a_str, b_str)) = target.split_once("..") {
+    let (tree_a, tree_b, label) = if let Some(cp_name) = target.strip_prefix("cp:") {
+        let (ta, _) = db
+            .get_checkpoint(&proj_hash, cp_name)?
+            .with_context(|| format!("Checkpoint `{}` not found", cp_name))?;
+        let snap = capture_snapshot(&project_root, &shadow_repo, None, Some(&ta))?;
+        (ta, snap.tree_hash, format!("checkpoint `{}` vs workspace", cp_name))
+    } else if let Some((a_str, b_str)) = target.split_once("..") {
         let a_id: i64 = a_str.trim().parse().context("Invalid start step ID")?;
         let b_id: i64 = b_str.trim().parse().context("Invalid end step ID")?;
         let step_a = db
@@ -935,6 +946,40 @@ pub fn cmd_status() -> Result<()> {
                 println!("Workspace:    ⚠ {} file(s) modified outside AgentBox since last snapshot", ext.len());
             }
         }
+    }
+    Ok(())
+}
+
+pub fn cmd_projects() -> Result<()> {
+    let paths = AgentBoxPaths::resolve()?;
+    if !paths.db_path().exists() {
+        println!("No AgentBox projects recorded yet. Run `abox init` in a repository.");
+        return Ok(());
+    }
+    let db = Database::open(&paths.db_path())?;
+    let projs = db.list_projects()?;
+    if projs.is_empty() {
+        println!("No AgentBox projects recorded yet.");
+        return Ok(());
+    }
+
+    println!(" {:<16} {:>7} {:>9} {:<20} PROJECT", "HASH", "STEPS", "STORAGE", "UPDATED");
+    for (hash, root_path, updated_at, steps) in projs {
+        let repo_dir = paths.shadow_repo_dir(&hash);
+        let mb = if repo_dir.exists() {
+            dir_size_bytes(&repo_dir) as f64 / (1024.0 * 1024.0)
+        } else {
+            0.0
+        };
+        let tstr = Local
+            .timestamp_opt(updated_at, 0)
+            .single()
+            .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| updated_at.to_string());
+        println!(
+            " {:<16} {:>7} {:>6.2} MB {:<20} {}",
+            hash, steps, mb, tstr, root_path
+        );
     }
     Ok(())
 }

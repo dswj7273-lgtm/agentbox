@@ -552,6 +552,12 @@ fn e2e_edge_cases_large_file_nested_repo_and_fail_open() {
     let status_out = env.run_abox(&["status"], None);
     assert!(String::from_utf8_lossy(&status_out.stdout).contains("modified outside AgentBox"));
 
+    let diff_cp = env.run_abox(&["diff", "cp:safe-point", "--patch"], None);
+    assert!(String::from_utf8_lossy(&diff_cp.stdout).contains("+experimental"));
+
+    let projs_out = env.run_abox(&["projects"], None);
+    assert!(String::from_utf8_lossy(&projs_out.stdout).contains("HASH"));
+
     let restore_tag = env.run_abox(&["undo", "--to-tag", "safe-point", "--force", "--yes"], None);
     assert!(restore_tag.status.success());
     assert_eq!(fs::read_to_string(env.proj.join("src/normal.txt")).unwrap(), "before\n");
@@ -742,6 +748,11 @@ fn e2e_multi_agent_unified_timeline_claude_codex_gemini() {
     );
     let log_oc = env.run_abox(&["log", "--all", "--agent", "opencode"], None);
     assert!(String::from_utf8_lossy(&log_oc.stdout).contains("src/opencode.ts"));
+
+    // Explicit --agent opencode install check
+    let init_oc = env.run_abox(&["init", "--project", "--agent", "opencode"], None);
+    assert!(init_oc.status.success());
+    assert!(env.proj.join(".opencode/plugins/agentbox.js").exists());
 
     // Uninstall removes all 3 cleanly
     let mut un_cmd = Command::new(abox_bin());

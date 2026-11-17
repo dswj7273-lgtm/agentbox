@@ -17,6 +17,7 @@ Built-in agent checkpoints typically track only internal file-editing tools (`Ed
   - **Claude Code**: `SessionStart`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `SessionEnd`
   - **Codex CLI**: `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, `SessionEnd`
   - **Gemini CLI**: `SessionStart`, `BeforeTool`, `AfterTool`, `SessionEnd`
+  - **OpenCode**: `.opencode/plugins/agentbox.js` (`tool.execute.before`, `tool.execute.after`)
   - **Hookless Editors (Cursor, etc.)**: `abox watch --agent cursor` filesystem fallback
 - **Minimal High-Risk Guard (`PreToolUse` / `BeforeTool`)**: Allows reversible in-project actions (covered by snapshots) while prompting (`ask`) or blocking (`deny`) irreversible/sensitive operations (`git push --force`, `git reset --hard`, `rm -rf` outside project, `DROP TABLE`, `curl | sh`, `.env*`/`~/.ssh` writes, or deleting `>20MB` excluded files).
 - **Zero-Hook Audit Report (`abox report`)**: Scans local `~/.claude/projects`, `~/.codex/sessions`, and `~/.gemini/tmp` logs to summarize shell commands, high-risk commands, tokens, and estimated API-equivalent USD cost (`--json`, `--html`).
@@ -45,14 +46,21 @@ abox log --all
 abox show 12
 abox diff 12
 
-# 4. Undo safely (revertible!)
+# 4. Undo safely (or preview with --dry-run, or use named checkpoints!)
+abox checkpoint before-refactor
+abox undo --to 12 --dry-run
 abox undo --to 12
+abox undo --to-tag before-refactor
 abox undo 12 --only src/config.ts
 
-# 5. Launch local Web UI or export audit trail
+# 5. Launch local Web UI, inspect status, or export audit trail
+abox status
+abox projects
 abox ui
 abox export --format otel --all --out audit-otel.json
 ```
+
+See [examples/github-actions/agentbox-pr-comment.yml](examples/github-actions/agentbox-pr-comment.yml) for posting `abox export --format markdown` on Pull Requests.
 
 ---
 
