@@ -181,6 +181,15 @@ impl Database {
                 started_at INTEGER NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_hash TEXT NOT NULL,
+                name TEXT NOT NULL,
+                tree_hash TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                UNIQUE(project_hash, name)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project, started_at DESC);
             CREATE INDEX IF NOT EXISTS idx_steps_session ON steps(session_id, seq);
             CREATE INDEX IF NOT EXISTS idx_steps_started ON steps(started_at DESC);
@@ -717,6 +726,59 @@ impl Database {
         let sessions: i64 = self.conn.query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))?;
         let steps: i64 = self.conn.query_row("SELECT COUNT(*) FROM steps", [], |r| r.get(0))?;
         Ok((projects, sessions, steps))
+    }
+
+    pub fn upsert_checkpoint(
+        &self,
+        project_hash: &str,
+        name: &str,
+        tree_hash: &str,
+        created_at: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO checkpoints(project_hash, name, tree_hash, created_at)
+            VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(project_hash, name) DO UPDATE SET
+                tree_hash = excluded.tree_hash,
+                created_at = excluded.created_at
+            "#,
+            params![project_hash, name, tree_hash, created_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_checkpoint(&self, project_hash: &str, name: &str) -> Result<Option<(String, i64)>> {
+        let res = self
+            .conn
+            .query_row(
+                "SELECT tree_hash, created_at FROM checkpoints WHERE project_hash = ?1 AND name = ?2",
+                params![project_hash, name],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        Ok(res)
+    }
+
+    pub fn list_checkpoints(&self, project_hash: &str) -> Result<Vec<(String, String, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name, tree_hash, created_at FROM checkpoints WHERE project_hash = ?1 ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![project_hash], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub fn count_steps_for_project(&self, project: &str) -> Result<i64> {
+        let c: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM steps s JOIN sessions sess ON sess.id = s.session_id WHERE sess.project = ?1",
+            params![project],
+            |r| r.get(0),
+        )?;
+        Ok(c)
     }
 }
 

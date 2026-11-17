@@ -96,6 +96,9 @@ enum Commands {
         /// Restore workspace to state right before this step
         #[arg(long)]
         to: Option<i64>,
+        /// Restore workspace to a named checkpoint created with `abox checkpoint`
+        #[arg(long)]
+        to_tag: Option<String>,
         /// Only restore specific file path(s)
         #[arg(long = "only")]
         only: Vec<String>,
@@ -105,7 +108,20 @@ enum Commands {
         /// Skip interactive confirmation prompt
         #[arg(short = 'y', long)]
         yes: bool,
+        /// Preview files that would be restored/deleted without modifying disk
+        #[arg(long)]
+        dry_run: bool,
     },
+    /// Save or list named workspace checkpoints
+    Checkpoint {
+        /// Checkpoint name (omit or pass --list to view saved checkpoints)
+        name: Option<String>,
+        /// List saved checkpoints for the current project
+        #[arg(long)]
+        list: bool,
+    },
+    /// Show AgentBox hook, snapshot, and workspace status for the current project
+    Status,
     /// Scan historical local agent logs (no hooks needed) and print audit summary
     Report {
         /// Lookback window in days
@@ -228,10 +244,14 @@ fn main() -> Result<()> {
         Commands::Undo {
             step,
             to,
+            to_tag,
             only,
             force,
             yes,
-        } => commands::cmd_undo(step, to, only, force, yes),
+            dry_run,
+        } => commands::cmd_undo(step, to, to_tag, only, force, yes, dry_run),
+        Commands::Checkpoint { name, list } => commands::cmd_checkpoint(name, list),
+        Commands::Status => commands::cmd_status(),
         Commands::Report {
             days,
             dir,

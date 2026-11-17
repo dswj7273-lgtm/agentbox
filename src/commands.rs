@@ -348,6 +348,7 @@ pub fn cmd_diff(target: &str, patch_only: bool) -> Result<()> {
 #[derive(Debug, serde::Serialize)]
 pub enum UndoStatus {
     Restored,
+    DryRun,
     Conflict,
     NoChanges,
     Aborted,
@@ -356,20 +357,33 @@ pub enum UndoStatus {
 #[derive(Debug, serde::Serialize)]
 pub struct UndoOutcome {
     pub status: UndoStatus,
-    pub target_step_id: i64,
+    pub target_label: String,
+    pub target_step_id: Option<i64>,
     pub restored_files: usize,
     pub undo_step_id: Option<i64>,
     pub conflict_files: Vec<(String, String)>,
+    pub planned_changes: Vec<(String, String)>,
 }
 
 pub fn cmd_undo(
     step_arg: Option<i64>,
     to_step: Option<i64>,
+    to_tag: Option<String>,
     only_paths: Vec<String>,
     force: bool,
     yes: bool,
+    dry_run: bool,
 ) -> Result<()> {
-    let outcome = execute_undo(step_arg, to_step, only_paths, force, yes, false)?;
+    let outcome = execute_undo(
+        step_arg,
+        to_step,
+        to_tag.as_deref(),
+        only_paths,
+        force,
+        yes,
+        false,
+        dry_run,
+    )?;
     match outcome.status {
         UndoStatus::Conflict => {
             println!(
@@ -381,11 +395,25 @@ pub fn cmd_undo(
             }
             println!("Refusing to overwrite manual edits. Re-run with `--force` to override.");
         }
-        UndoStatus::NoChanges => {
+        UndoStatus::DryRun => {
             println!(
-                "Workspace already matches state before step #{}.",
-                outcome.target_step_id
+                "Dry-run: would apply {} change(s) to restore {}:",
+                outcome.planned_changes.len(),
+                outcome.target_label
             );
+            for (path, ch) in &outcome.planned_changes {
+                let verb = if ch == "D" { "DELETE" } else { "RESTORE" };
+                println!("  {:<8} {}", verb, path);
+            }
+            if !outcome.conflict_files.is_empty() {
+                println!(
+                    "⚠ {} manual conflict(s) would require `--force`.",
+                    outcome.conflict_files.len()
+                );
+            }
+        }
+        UndoStatus::NoChanges => {
+            println!("Workspace already matches {}.", outcome.target_label);
         }
         UndoStatus::Aborted => {
             println!("Aborted.");
@@ -401,13 +429,16 @@ pub fn cmd_undo(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn execute_undo(
     step_arg: Option<i64>,
     to_step: Option<i64>,
+    to_tag: Option<&str>,
     only_paths: Vec<String>,
     force: bool,
     yes: bool,
     non_interactive: bool,
+    dry_run: bool,
 ) -> Result<UndoOutcome> {
     let paths = AgentBoxPaths::resolve()?;
     let mut db = Database::open(&paths.db_path())?;
@@ -418,18 +449,35 @@ pub fn execute_undo(
     let shadow_repo = paths.shadow_repo_dir(&proj_hash);
     let lock_path = paths.lock_path(&proj_hash);
 
-    let target_step = if let Some(id) = to_step.or(step_arg) {
-        db.get_step(id)?
-            .with_context(|| format!("Step #{} not found", id))?
+    let (target_tree, target_label, target_step_id, input_summary) = if let Some(tag) = to_tag {
+        let (tree, _) = db
+            .get_checkpoint(&proj_hash, tag)?
+            .with_context(|| format!("Checkpoint `{}` not found for this project", tag))?;
+        (
+            tree,
+            format!("checkpoint `{}`", tag),
+            None,
+            format!("checkpoint {}", tag),
+        )
     } else {
-        db.get_latest_mutating_step_for_project(&project_str)?
-            .context("No undoable step with snapshots found for this project")?
+        let target_step = if let Some(id) = to_step.or(step_arg) {
+            db.get_step(id)?
+                .with_context(|| format!("Step #{} not found", id))?
+        } else {
+            db.get_latest_mutating_step_for_project(&project_str)?
+                .context("No undoable step with snapshots found for this project")?
+        };
+        let tree = target_step
+            .pre_tree
+            .clone()
+            .with_context(|| format!("Step #{} has no pre_tree snapshot to restore", target_step.id))?;
+        (
+            tree,
+            format!("state before step #{}", target_step.id),
+            Some(target_step.id),
+            target_step.input_summary.clone(),
+        )
     };
-
-    let target_tree = target_step
-        .pre_tree
-        .clone()
-        .with_context(|| format!("Step #{} has no pre_tree snapshot to restore", target_step.id))?;
 
     let _lock = ProjectLock::acquire(&lock_path)?;
 
@@ -438,11 +486,12 @@ pub fn execute_undo(
     let current_snap = capture_snapshot(&project_root, &shadow_repo, None, last_agent_tree.as_deref())?;
     let current_tree = current_snap.tree_hash;
 
+    let mut relevant_ext: Vec<(String, String)> = Vec::new();
     if let Some(ref expected) = last_agent_tree {
         if expected != &current_tree {
             let (_, ext_changes) =
                 detect_external_modifications(&project_root, &shadow_repo, expected)?;
-            let relevant_ext: Vec<(String, String)> = if only_paths.is_empty() {
+            relevant_ext = if only_paths.is_empty() {
                 ext_changes
             } else {
                 ext_changes
@@ -451,13 +500,15 @@ pub fn execute_undo(
                     .collect()
             };
 
-            if !relevant_ext.is_empty() && !force {
+            if !relevant_ext.is_empty() && !force && !dry_run {
                 return Ok(UndoOutcome {
                     status: UndoStatus::Conflict,
-                    target_step_id: target_step.id,
+                    target_label,
+                    target_step_id,
                     restored_files: 0,
                     undo_step_id: None,
                     conflict_files: relevant_ext,
+                    planned_changes: Vec::new(),
                 });
             }
         }
@@ -468,30 +519,41 @@ pub fn execute_undo(
     } else {
         Some(only_paths.as_slice())
     };
-    let preview_changes = diff_trees(&shadow_repo, &current_tree, &target_tree, false)?;
-    let filtered_count = if let Some(only) = only_slice {
-        preview_changes
-            .iter()
-            .filter(|(p, _)| only.iter().any(|o| o == p))
-            .count()
-    } else {
-        preview_changes.len()
-    };
+    let mut planned_changes = diff_trees(&shadow_repo, &current_tree, &target_tree, false)?;
+    if let Some(only) = only_slice {
+        planned_changes.retain(|(p, _)| only.iter().any(|o| o == p));
+    }
 
-    if filtered_count == 0 {
+    if planned_changes.is_empty() {
         return Ok(UndoOutcome {
             status: UndoStatus::NoChanges,
-            target_step_id: target_step.id,
+            target_label,
+            target_step_id,
             restored_files: 0,
             undo_step_id: None,
-            conflict_files: Vec::new(),
+            conflict_files: relevant_ext,
+            planned_changes: Vec::new(),
+        });
+    }
+
+    if dry_run {
+        return Ok(UndoOutcome {
+            status: UndoStatus::DryRun,
+            target_label,
+            target_step_id,
+            restored_files: 0,
+            undo_step_id: None,
+            conflict_files: relevant_ext,
+            planned_changes,
         });
     }
 
     if !yes && !non_interactive {
         print!(
-            "Restore {} file(s) to state before step #{} ({})? [y/N] ",
-            filtered_count, target_step.id, target_step.input_summary
+            "Restore {} file(s) to {} ({})? [y/N] ",
+            planned_changes.len(),
+            target_label,
+            input_summary
         );
         std::io::stdout().flush()?;
         let mut answer = String::new();
@@ -499,10 +561,12 @@ pub fn execute_undo(
         if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
             return Ok(UndoOutcome {
                 status: UndoStatus::Aborted,
-                target_step_id: target_step.id,
+                target_label,
+                target_step_id,
                 restored_files: 0,
                 undo_step_id: None,
                 conflict_files: Vec::new(),
+                planned_changes: Vec::new(),
             });
         }
     }
@@ -539,9 +603,10 @@ pub fn execute_undo(
         session_id: undo_session,
         agent: "abox".to_string(),
         tool: "Undo".to_string(),
-        input_summary: format!("undo to before #{}", target_step.id),
+        input_summary: format!("undo to {}", target_label),
         input_json: serde_json::json!({
-            "target_step": target_step.id,
+            "target_step": target_step_id,
+            "target_tag": to_tag,
             "only": only_paths,
             "force": force
         })
@@ -565,10 +630,12 @@ pub fn execute_undo(
 
     Ok(UndoOutcome {
         status: UndoStatus::Restored,
-        target_step_id: target_step.id,
+        target_label,
+        target_step_id,
         restored_files: applied.len(),
         undo_step_id: Some(undo_id),
         conflict_files: Vec::new(),
+        planned_changes: Vec::new(),
     })
 }
 
@@ -757,6 +824,120 @@ pub fn cmd_policy_test(tool: &str, target: &str) -> Result<()> {
         verdict.rule_id.as_deref().unwrap_or("-"),
         verdict.reason.as_deref().unwrap_or("(allowed)")
     );
+    Ok(())
+}
+
+pub fn cmd_checkpoint(name: Option<String>, list: bool) -> Result<()> {
+    let paths = AgentBoxPaths::resolve()?;
+    paths.ensure_dirs()?;
+    let db = Database::open(&paths.db_path())?;
+    let cwd = std::env::current_dir()?;
+    let project_root = resolve_project_root(&cwd);
+    let project_str = project_root.to_string_lossy().to_string();
+    let proj_hash = project_hash(&project_root);
+    let shadow_repo = paths.shadow_repo_dir(&proj_hash);
+    let lock_path = paths.lock_path(&proj_hash);
+
+    if list || name.is_none() {
+        let cps = db.list_checkpoints(&proj_hash)?;
+        if cps.is_empty() {
+            println!("No checkpoints yet for {}. Create one with `abox checkpoint <name>`.", project_root.display());
+            return Ok(());
+        }
+        println!(" {:<24} {:<10} {}", "NAME", "TREE", "CREATED");
+        for (n, tree, ts) in cps {
+            let tstr = Local
+                .timestamp_opt(ts, 0)
+                .single()
+                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| ts.to_string());
+            println!(" {:<24} {:<10} {}", pad_or_truncate(&n, 24), &tree[..tree.len().min(8)], tstr);
+        }
+        return Ok(());
+    }
+
+    let tag_name = name.unwrap();
+    let _lock = ProjectLock::acquire(&lock_path)?;
+    let prev = db.get_project_last_tree(&proj_hash)?;
+    let snap = capture_snapshot(&project_root, &shadow_repo, Some(&format!("cp-{}", tag_name)), prev.as_deref())?;
+    let now_s = chrono::Utc::now().timestamp();
+    db.upsert_project_baseline(
+        &proj_hash,
+        &project_str,
+        Some(&snap.tree_hash),
+        Some(&snap.tree_hash),
+        now_s,
+    )?;
+    db.upsert_checkpoint(&proj_hash, &tag_name, &snap.tree_hash, now_s)?;
+    println!(
+        "✔ Saved checkpoint `{}` (tree {}) — restore anytime with `abox undo --to-tag {}`",
+        tag_name,
+        &snap.tree_hash[..8],
+        tag_name
+    );
+    Ok(())
+}
+
+pub fn cmd_status() -> Result<()> {
+    let paths = AgentBoxPaths::resolve()?;
+    let cwd = std::env::current_dir()?;
+    let project_root = resolve_project_root(&cwd);
+    let project_str = project_root.to_string_lossy().to_string();
+    let proj_hash = project_hash(&project_root);
+    let shadow_repo = paths.shadow_repo_dir(&proj_hash);
+
+    let mut hooks_active = Vec::new();
+    for a in all_adapters() {
+        let g = a.is_installed(InstallScope::Global, &project_root);
+        let p = a.is_installed(InstallScope::Project, &project_root);
+        if g || p {
+            hooks_active.push(format!("{}({})", a.name(), if p { "project" } else { "global" }));
+        }
+    }
+
+    println!("Project:      {}", project_root.display());
+    println!(
+        "Hooks:        {}",
+        if hooks_active.is_empty() {
+            "none installed (run `abox init`)".to_string()
+        } else {
+            hooks_active.join(", ")
+        }
+    );
+
+    if !paths.db_path().exists() {
+        println!("History:      not initialized");
+        return Ok(());
+    }
+
+    let db = Database::open(&paths.db_path())?;
+    let step_count = db.count_steps_for_project(&project_str)?;
+    let shadow_mb = if shadow_repo.exists() {
+        dir_size_bytes(&shadow_repo) as f64 / (1024.0 * 1024.0)
+    } else {
+        0.0
+    };
+    println!("Steps:        {} recorded | Shadow repo: {:.2} MB", step_count, shadow_mb);
+
+    if let Some(last_step) = db.get_latest_mutating_step_for_project(&project_str)? {
+        println!(
+            "Latest step:  #{} [{}] {} ({} files)",
+            last_step.id, last_step.agent, last_step.input_summary, last_step.files_changed
+        );
+    }
+
+    if let Some(last_tree) = db.get_project_last_tree(&proj_hash)? {
+        if shadow_repo.exists() {
+            let lock_path = paths.lock_path(&proj_hash);
+            let _lock = ProjectLock::acquire(&lock_path)?;
+            let (_, ext) = detect_external_modifications(&project_root, &shadow_repo, &last_tree)?;
+            if ext.is_empty() {
+                println!("Workspace:    ✔ clean relative to last AgentBox snapshot");
+            } else {
+                println!("Workspace:    ⚠ {} file(s) modified outside AgentBox since last snapshot", ext.len());
+            }
+        }
+    }
     Ok(())
 }
 

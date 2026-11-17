@@ -168,7 +168,16 @@ struct UndoRequest {
 
 fn api_undo(body: &str) -> Result<String> {
     let req: UndoRequest = serde_json::from_str(body)?;
-    let outcome = execute_undo(None, Some(req.step_id), req.only, req.force, true, true)?;
+    let outcome = execute_undo(
+        None,
+        Some(req.step_id),
+        None,
+        req.only,
+        req.force,
+        true,
+        true,
+        false,
+    )?;
     Ok(serde_json::to_string(&outcome)?)
 }
 

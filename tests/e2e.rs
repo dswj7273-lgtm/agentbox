@@ -536,6 +536,25 @@ fn e2e_edge_cases_large_file_nested_repo_and_fail_open() {
     assert_eq!(fs::metadata(&big_file).unwrap().len(), 21 * 1024 * 1024);
     assert!(sub_repo.join(".git").exists());
     assert_eq!(fs::read_to_string(sub_repo.join("lib.rs")).unwrap(), "pub fn sub() {}\n");
+
+    // 4. Named checkpoint + --dry-run + --to-tag + status
+    let cp_out = env.run_abox(&["checkpoint", "safe-point"], None);
+    assert!(cp_out.status.success());
+    assert!(String::from_utf8_lossy(&cp_out.stdout).contains("safe-point"));
+
+    fs::write(env.proj.join("src/normal.txt"), "experimental\n").unwrap();
+    let dry = env.run_abox(&["undo", "--to-tag", "safe-point", "--dry-run"], None);
+    let dry_str = String::from_utf8_lossy(&dry.stdout);
+    assert!(dry_str.contains("Dry-run:") && dry_str.contains("src/normal.txt"), "dry={}", dry_str);
+    // File must remain untouched after --dry-run
+    assert_eq!(fs::read_to_string(env.proj.join("src/normal.txt")).unwrap(), "experimental\n");
+
+    let status_out = env.run_abox(&["status"], None);
+    assert!(String::from_utf8_lossy(&status_out.stdout).contains("modified outside AgentBox"));
+
+    let restore_tag = env.run_abox(&["undo", "--to-tag", "safe-point", "--force", "--yes"], None);
+    assert!(restore_tag.status.success());
+    assert_eq!(fs::read_to_string(env.proj.join("src/normal.txt")).unwrap(), "before\n");
 }
 
 #[test]
