@@ -304,16 +304,19 @@ fn enrich_session_from_transcript(
 
 pub fn summarize_tool_input(tool: &str, input: &serde_json::Value) -> String {
     match tool {
-        "Bash" | "run_shell_command" | "shell_command" | "exec_command" => input
+        "Bash" | "run_shell_command" | "shell_command" | "exec_command" | "bash" => input
             .get("command")
             .or_else(|| input.get("cmd"))
             .and_then(|v| v.as_str())
             .map(|s| truncate_one_line(s, 72))
             .unwrap_or_else(|| "(command)".into()),
-        "Edit" | "Write" | "MultiEdit" | "Read" | "NotebookEdit" | "write_file" | "edit_file" => {
+        "Edit" | "Write" | "MultiEdit" | "Read" | "NotebookEdit" | "write_file" | "edit_file"
+        | "edit" | "write" | "read" => {
             input
                 .get("file_path")
                 .or_else(|| input.get("path"))
+                .or_else(|| input.get("filePath"))
+                .or_else(|| input.get("target_file"))
                 .or_else(|| input.get("notebook_path"))
                 .and_then(|v| v.as_str())
                 .map(|s| truncate_path_tail(s, 60))

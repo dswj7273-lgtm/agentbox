@@ -703,6 +703,46 @@ fn e2e_multi_agent_unified_timeline_claude_codex_gemini() {
     let md_str = String::from_utf8_lossy(&exp_md.stdout);
     assert!(md_str.contains("### AgentBox Audit & Cost Summary") && md_str.contains("| `claude` |"));
 
+    // 4. OpenCode plugin hook + Guard + PostToolUse snapshot
+    let opencode_guard = env.run_abox(
+        &["hook", "opencode"],
+        Some(&serde_json::json!({
+            "hook_event_name": "tool.execute.before",
+            "session_id": "s-opencode",
+            "cwd": env.proj.to_string_lossy(),
+            "tool_name": "bash",
+            "tool_use_id": "oc-1",
+            "tool_input": { "command": "git push --force origin main" }
+        }).to_string()),
+    );
+    assert!(String::from_utf8_lossy(&opencode_guard.stdout).contains("\"decision\":\"ask\""));
+
+    env.run_abox(
+        &["hook", "opencode"],
+        Some(&serde_json::json!({
+            "hook_event_name": "tool.execute.before",
+            "session_id": "s-opencode",
+            "cwd": env.proj.to_string_lossy(),
+            "tool_name": "write",
+            "tool_use_id": "oc-2",
+            "tool_input": { "filePath": "src/opencode.ts" }
+        }).to_string()),
+    );
+    fs::write(env.proj.join("src/opencode.ts"), "export const oc = 1;\n").unwrap();
+    env.run_abox(
+        &["hook", "opencode"],
+        Some(&serde_json::json!({
+            "hook_event_name": "tool.execute.after",
+            "session_id": "s-opencode",
+            "cwd": env.proj.to_string_lossy(),
+            "tool_name": "write",
+            "tool_use_id": "oc-2",
+            "tool_input": { "filePath": "src/opencode.ts" }
+        }).to_string()),
+    );
+    let log_oc = env.run_abox(&["log", "--all", "--agent", "opencode"], None);
+    assert!(String::from_utf8_lossy(&log_oc.stdout).contains("src/opencode.ts"));
+
     // Uninstall removes all 3 cleanly
     let mut un_cmd = Command::new(abox_bin());
     let un_out = un_cmd

@@ -64,6 +64,10 @@ pub fn is_mutating_tool(tool: &str) -> bool {
             | "apply_patch"
             | "shell_command"
             | "exec_command"
+            | "bash"
+            | "edit"
+            | "write"
+            | "patch"
     )
 }
 

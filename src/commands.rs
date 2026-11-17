@@ -808,7 +808,7 @@ pub fn cmd_policy_test(tool: &str, target: &str) -> Result<()> {
 
     let input = if matches!(
         tool,
-        "Bash" | "run_shell_command" | "shell_command" | "exec_command"
+        "Bash" | "run_shell_command" | "shell_command" | "exec_command" | "bash"
     ) {
         serde_json::json!({ "command": target })
     } else {

@@ -322,16 +322,32 @@ fn compile_rule(r: PolicyRuleConfig) -> Option<CompiledRule> {
 }
 
 fn default_rules() -> Vec<PolicyRuleConfig> {
+    let shell_tools = || {
+        Some(StringOrVec::Many(vec![
+            "Bash".into(),
+            "run_shell_command".into(),
+            "shell_command".into(),
+            "exec_command".into(),
+            "bash".into(),
+        ]))
+    };
+    let edit_tools = || {
+        Some(StringOrVec::Many(vec![
+            "Edit".into(),
+            "Write".into(),
+            "MultiEdit".into(),
+            "NotebookEdit".into(),
+            "write_file".into(),
+            "edit_file".into(),
+            "edit".into(),
+            "write".into(),
+        ]))
+    };
     vec![
         PolicyRuleConfig {
             id: "rm.outside_project".into(),
             matcher: RuleMatchConfig {
-                tool: Some(StringOrVec::Many(vec![
-                    "Bash".into(),
-                    "run_shell_command".into(),
-                    "shell_command".into(),
-                    "exec_command".into(),
-                ])),
+                tool: shell_tools(),
                 command: Some(r"(?i)(^|\s)rm\s+(-[a-z]*[rR][a-z]*|--recursive)".into()),
                 path: None,
                 path_scope: Some("outside".into()),
@@ -345,12 +361,7 @@ fn default_rules() -> Vec<PolicyRuleConfig> {
         PolicyRuleConfig {
             id: "rm.in_project".into(),
             matcher: RuleMatchConfig {
-                tool: Some(StringOrVec::Many(vec![
-                    "Bash".into(),
-                    "run_shell_command".into(),
-                    "shell_command".into(),
-                    "exec_command".into(),
-                ])),
+                tool: shell_tools(),
                 command: Some(r"(?i)(^|\s)rm\s+(-[a-z]*[rR][a-z]*|--recursive)".into()),
                 path: None,
                 path_scope: Some("project".into()),
@@ -361,12 +372,7 @@ fn default_rules() -> Vec<PolicyRuleConfig> {
         PolicyRuleConfig {
             id: "git.force_push".into(),
             matcher: RuleMatchConfig {
-                tool: Some(StringOrVec::Many(vec![
-                    "Bash".into(),
-                    "run_shell_command".into(),
-                    "shell_command".into(),
-                    "exec_command".into(),
-                ])),
+                tool: shell_tools(),
                 command: Some(r"\bgit\s+push\b.*(\s-f\b|\s--force\b|\s--force-with-lease\b)".into()),
                 path: None,
                 path_scope: None,
@@ -380,12 +386,7 @@ fn default_rules() -> Vec<PolicyRuleConfig> {
         PolicyRuleConfig {
             id: "git.destructive_reset".into(),
             matcher: RuleMatchConfig {
-                tool: Some(StringOrVec::Many(vec![
-                    "Bash".into(),
-                    "run_shell_command".into(),
-                    "shell_command".into(),
-                    "exec_command".into(),
-                ])),
+                tool: shell_tools(),
                 command: Some(
                     r"\bgit\s+(reset\s+--hard|clean\s+-[a-z]*[fd][a-z]*|checkout\s+--\s+\.|restore\s+\.)"
                         .into(),
@@ -401,12 +402,7 @@ fn default_rules() -> Vec<PolicyRuleConfig> {
         PolicyRuleConfig {
             id: "db.destructive".into(),
             matcher: RuleMatchConfig {
-                tool: Some(StringOrVec::Many(vec![
-                    "Bash".into(),
-                    "run_shell_command".into(),
-                    "shell_command".into(),
-                    "exec_command".into(),
-                ])),
+                tool: shell_tools(),
                 command: Some(r"(?i)\b(DROP\s+(TABLE|DATABASE|SCHEMA)|TRUNCATE\s+TABLE)\b".into()),
                 path: None,
                 path_scope: None,
@@ -420,12 +416,7 @@ fn default_rules() -> Vec<PolicyRuleConfig> {
         PolicyRuleConfig {
             id: "shell.pipe_exec".into(),
             matcher: RuleMatchConfig {
-                tool: Some(StringOrVec::Many(vec![
-                    "Bash".into(),
-                    "run_shell_command".into(),
-                    "shell_command".into(),
-                    "exec_command".into(),
-                ])),
+                tool: shell_tools(),
                 command: Some(r"(?i)\b(curl|wget)\b.*\|\s*(sh|bash|zsh)\b".into()),
                 path: None,
                 path_scope: None,
@@ -436,14 +427,7 @@ fn default_rules() -> Vec<PolicyRuleConfig> {
         PolicyRuleConfig {
             id: "secrets.write".into(),
             matcher: RuleMatchConfig {
-                tool: Some(StringOrVec::Many(vec![
-                    "Edit".into(),
-                    "Write".into(),
-                    "MultiEdit".into(),
-                    "NotebookEdit".into(),
-                    "write_file".into(),
-                    "edit_file".into(),
-                ])),
+                tool: edit_tools(),
                 command: None,
                 path: Some(StringOrVec::Many(vec![
                     "**/.env".into(),
@@ -478,7 +462,7 @@ fn expand_tilde(path: &str) -> String {
 fn extract_command_from_input(tool: &str, input: &serde_json::Value) -> Option<String> {
     if matches!(
         tool,
-        "Bash" | "run_shell_command" | "shell_command" | "exec_command"
+        "Bash" | "run_shell_command" | "shell_command" | "exec_command" | "bash"
     ) {
         return input
             .get("command")

@@ -1,7 +1,7 @@
 use crate::commands::execute_undo;
 use crate::db::{Database, LogFilter};
 use crate::paths::{project_hash, resolve_project_root, AgentBoxPaths};
-use crate::snapshot::diff_patch;
+use crate::snapshot::{capture_snapshot, diff_patch, ProjectLock};
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::json;
@@ -43,6 +43,14 @@ pub fn handle_http_request(
             Err(e) => (400, "application/json", json!({"error": e.to_string()}).to_string()),
         },
         ("POST", "/api/undo") => match api_undo(body) {
+            Ok(json_str) => (200, "application/json", json_str),
+            Err(e) => (400, "application/json", json!({"error": e.to_string()}).to_string()),
+        },
+        ("GET", "/api/checkpoints") => match api_checkpoints(cwd) {
+            Ok(json_str) => (200, "application/json", json_str),
+            Err(e) => (500, "application/json", json!({"error": e.to_string()}).to_string()),
+        },
+        ("POST", "/api/checkpoint") => match api_create_checkpoint(cwd, body) {
             Ok(json_str) => (200, "application/json", json_str),
             Err(e) => (400, "application/json", json!({"error": e.to_string()}).to_string()),
         },
@@ -159,19 +167,27 @@ fn api_diff(cwd: &Path, query: &str) -> Result<String> {
 
 #[derive(Deserialize)]
 struct UndoRequest {
-    step_id: i64,
+    #[serde(default)]
+    step_id: Option<i64>,
+    #[serde(default)]
+    tag: Option<String>,
     #[serde(default)]
     only: Vec<String>,
     #[serde(default)]
     force: bool,
 }
 
+#[derive(Deserialize)]
+struct CheckpointRequest {
+    name: String,
+}
+
 fn api_undo(body: &str) -> Result<String> {
     let req: UndoRequest = serde_json::from_str(body)?;
     let outcome = execute_undo(
         None,
-        Some(req.step_id),
-        None,
+        req.step_id,
+        req.tag.as_deref(),
         req.only,
         req.force,
         true,
@@ -179,6 +195,45 @@ fn api_undo(body: &str) -> Result<String> {
         false,
     )?;
     Ok(serde_json::to_string(&outcome)?)
+}
+
+fn api_checkpoints(cwd: &Path) -> Result<String> {
+    let paths = AgentBoxPaths::resolve()?;
+    if !paths.db_path().exists() {
+        return Ok(json!({"checkpoints": []}).to_string());
+    }
+    let db = Database::open(&paths.db_path())?;
+    let project_root = resolve_project_root(cwd);
+    let proj_hash = project_hash(&project_root);
+    let cps = db.list_checkpoints(&proj_hash)?;
+    let items: Vec<_> = cps
+        .into_iter()
+        .map(|(name, tree_hash, created_at)| json!({"name": name, "tree_hash": tree_hash, "created_at": created_at}))
+        .collect();
+    Ok(json!({"checkpoints": items}).to_string())
+}
+
+fn api_create_checkpoint(cwd: &Path, body: &str) -> Result<String> {
+    let req: CheckpointRequest = serde_json::from_str(body)?;
+    let name = req.name.trim();
+    if name.is_empty() {
+        anyhow::bail!("Checkpoint name cannot be empty");
+    }
+    let paths = AgentBoxPaths::resolve()?;
+    paths.ensure_dirs()?;
+    let db = Database::open(&paths.db_path())?;
+    let project_root = resolve_project_root(cwd);
+    let proj_str = project_root.to_string_lossy().to_string();
+    let proj_hash = project_hash(&project_root);
+    let shadow_repo = paths.shadow_repo_dir(&proj_hash);
+    let lock_path = paths.lock_path(&proj_hash);
+    let _lock = ProjectLock::acquire(&lock_path)?;
+    let prev = db.get_project_last_tree(&proj_hash)?;
+    let snap = capture_snapshot(&project_root, &shadow_repo, Some(&format!("cp-{}", name)), prev.as_deref())?;
+    let now_s = chrono::Utc::now().timestamp();
+    db.upsert_project_baseline(&proj_hash, &proj_str, Some(&snap.tree_hash), Some(&snap.tree_hash), now_s)?;
+    db.upsert_checkpoint(&proj_hash, name, &snap.tree_hash, now_s)?;
+    Ok(json!({"ok": true, "name": name, "tree_hash": snap.tree_hash}).to_string())
 }
 
 fn query_param(query: &str, key: &str) -> Option<String> {
@@ -234,8 +289,9 @@ const UI_HTML: &str = r#"<!doctype html>
 <header>
   <div class="brand">AgentBox <span class="badge" id="proj">Loading...</span></div>
   <div class="controls">
-    <select id="agentFilter"><option value="">All Agents</option><option value="claude">claude</option><option value="codex">codex</option><option value="gemini">gemini</option><option value="abox">abox</option></select>
+    <select id="agentFilter"><option value="">All Agents</option><option value="claude">claude</option><option value="codex">codex</option><option value="gemini">gemini</option><option value="opencode">opencode</option><option value="cursor">cursor</option><option value="abox">abox</option></select>
     <label style="font-size:13px"><input type="checkbox" id="allSessions" checked /> All sessions</label>
+    <button class="primary" onclick="saveCheckpoint()">Save Checkpoint</button>
     <button onclick="loadSteps()">Refresh</button>
   </div>
 </header>
@@ -313,6 +369,14 @@ function colorDiff(p){
     if (l.startsWith('@@') || l.startsWith('diff ')) return `<span class="d-hdr">${e}</span>`;
     return e;
   }).join('\n');
+}
+async function saveCheckpoint() {
+  const name = prompt('Checkpoint name (e.g., before-refactor):');
+  if (!name || !name.trim()) return;
+  const res = await fetch('/api/checkpoint', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name: name.trim()}) });
+  const out = await res.json();
+  if (out.ok) alert(`Saved checkpoint "${out.name}" (${out.tree_hash.slice(0,8)})`);
+  else alert('Failed: ' + (out.error || 'unknown error'));
 }
 document.getElementById('agentFilter').onchange = loadSteps;
 document.getElementById('allSessions').onchange = loadSteps;
