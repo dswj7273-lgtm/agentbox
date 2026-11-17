@@ -403,3 +403,149 @@ fn e2e_diff_show_undo_only_policy_override_and_report() {
     assert!(doc_out.status.success());
     assert!(String::from_utf8_lossy(&doc_out.stdout).contains("Git:"));
 }
+
+#[test]
+fn e2e_multi_agent_unified_timeline_claude_codex_gemini() {
+    let env = TestEnv::new("multi_agent");
+    let codex_home = env.root.join("codex_home");
+    let gemini_home = env.root.join("gemini_home");
+    fs::create_dir_all(&codex_home).unwrap();
+    fs::create_dir_all(&gemini_home).unwrap();
+    fs::create_dir_all(env.proj.join("src")).unwrap();
+    fs::write(env.proj.join("src/app.ts"), "export const v = 0;\n").unwrap();
+
+    // Run `abox init --project` with simulated ~/.codex and ~/.gemini detected
+    let mut init_cmd = Command::new(abox_bin());
+    let init_out = init_cmd
+        .current_dir(&env.proj)
+        .env("AGENTBOX_HOME", &env.abox_home)
+        .env("AGENTBOX_CLAUDE_HOME", &env.claude_home)
+        .env("AGENTBOX_CODEX_HOME", &codex_home)
+        .env("AGENTBOX_GEMINI_HOME", &gemini_home)
+        .args(["init", "--project"])
+        .output()
+        .unwrap();
+    assert!(init_out.status.success());
+    assert!(env.proj.join(".claude/settings.json").exists());
+    assert!(env.proj.join(".codex/hooks.json").exists());
+    assert!(env.proj.join(".gemini/settings.json").exists());
+    let gemini_cfg = fs::read_to_string(env.proj.join(".gemini/settings.json")).unwrap();
+    assert!(gemini_cfg.contains("BeforeTool") && gemini_cfg.contains("AfterTool"));
+
+    // 1. Claude edits src/app.ts
+    env.run_abox(
+        &["hook", "claude"],
+        Some(&serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "s-claude",
+            "cwd": env.proj.to_string_lossy(),
+            "tool_name": "Edit",
+            "tool_use_id": "c1",
+            "tool_input": { "file_path": "src/app.ts" }
+        }).to_string()),
+    );
+    fs::write(env.proj.join("src/app.ts"), "export const v = 1;\n").unwrap();
+    env.run_abox(
+        &["hook", "claude"],
+        Some(&serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "s-claude",
+            "cwd": env.proj.to_string_lossy(),
+            "tool_name": "Edit",
+            "tool_use_id": "c1",
+            "tool_input": { "file_path": "src/app.ts" }
+        }).to_string()),
+    );
+
+    // 2. Codex edits src/app.ts via shell_command
+    env.run_abox(
+        &["hook", "codex"],
+        Some(&serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "s-codex",
+            "cwd": env.proj.to_string_lossy(),
+            "tool_name": "shell_command",
+            "tool_use_id": "x1",
+            "tool_input": { "command": "echo v2 > src/app.ts" }
+        }).to_string()),
+    );
+    fs::write(env.proj.join("src/app.ts"), "export const v = 2;\n").unwrap();
+    env.run_abox(
+        &["hook", "codex"],
+        Some(&serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "s-codex",
+            "cwd": env.proj.to_string_lossy(),
+            "tool_name": "shell_command",
+            "tool_use_id": "x1",
+            "tool_input": { "command": "echo v2 > src/app.ts" }
+        }).to_string()),
+    );
+
+    // 3. Gemini checks Guard with BeforeTool on `git push --force` -> decision=ask
+    let gem_guard = env.run_abox(
+        &["hook", "gemini"],
+        Some(&serde_json::json!({
+            "hook_event_name": "BeforeTool",
+            "session_id": "s-gemini",
+            "cwd": env.proj.to_string_lossy(),
+            "tool_name": "run_shell_command",
+            "tool_use_id": "g1",
+            "tool_input": { "command": "git push --force origin main" }
+        }).to_string()),
+    );
+    let gem_out = String::from_utf8_lossy(&gem_guard.stdout);
+    assert!(gem_out.contains("\"decision\":\"ask\""), "gem_out={}", gem_out);
+
+    // Gemini writes src/gemini.ts via BeforeTool / AfterTool
+    env.run_abox(
+        &["hook", "gemini"],
+        Some(&serde_json::json!({
+            "hook_event_name": "BeforeTool",
+            "session_id": "s-gemini",
+            "cwd": env.proj.to_string_lossy(),
+            "tool_name": "write_file",
+            "tool_use_id": "g2",
+            "tool_input": { "file_path": "src/gemini.ts" }
+        }).to_string()),
+    );
+    fs::write(env.proj.join("src/gemini.ts"), "export const g = true;\n").unwrap();
+    env.run_abox(
+        &["hook", "gemini"],
+        Some(&serde_json::json!({
+            "hook_event_name": "AfterTool",
+            "session_id": "s-gemini",
+            "cwd": env.proj.to_string_lossy(),
+            "tool_name": "write_file",
+            "tool_use_id": "g2",
+            "tool_input": { "file_path": "src/gemini.ts" }
+        }).to_string()),
+    );
+
+    // Unified timeline across all 3 agents!
+    let log_all = env.run_abox(&["log", "--all"], None);
+    let log_str = String::from_utf8_lossy(&log_all.stdout);
+    assert!(log_str.contains("claude"), "log={}", log_str);
+    assert!(log_str.contains("codex"), "log={}", log_str);
+    assert!(log_str.contains("gemini"), "log={}", log_str);
+
+    // Cost summary by agent
+    let cost_out = env.run_abox(&["cost", "--by", "agent"], None);
+    let cost_str = String::from_utf8_lossy(&cost_out.stdout);
+    assert!(cost_str.contains("claude") && cost_str.contains("codex") && cost_str.contains("gemini"), "cost={}", cost_str);
+
+    // Uninstall removes all 3 cleanly
+    let mut un_cmd = Command::new(abox_bin());
+    let un_out = un_cmd
+        .current_dir(&env.proj)
+        .env("AGENTBOX_HOME", &env.abox_home)
+        .env("AGENTBOX_CLAUDE_HOME", &env.claude_home)
+        .env("AGENTBOX_CODEX_HOME", &codex_home)
+        .env("AGENTBOX_GEMINI_HOME", &gemini_home)
+        .args(["uninstall", "--project"])
+        .output()
+        .unwrap();
+    assert!(un_out.status.success());
+    assert!(!fs::read_to_string(env.proj.join(".codex/hooks.json")).unwrap().contains("hook codex"));
+    assert!(!fs::read_to_string(env.proj.join(".gemini/settings.json")).unwrap().contains("hook gemini"));
+}

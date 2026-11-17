@@ -157,6 +157,7 @@ impl AgentAdapter for ClaudeAdapter {
             agent: self.name().to_string(),
             config_path,
             backup_path,
+            post_install_note: None,
         })
     }
 

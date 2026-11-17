@@ -1,17 +1,47 @@
-#[derive(Debug, Clone, Copy)]
+use crate::paths::AgentBoxPaths;
+use serde::Deserialize;
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Copy, Deserialize)]
 pub struct ModelPricing {
     pub input_per_million: f64,
     pub output_per_million: f64,
+    #[serde(default)]
     pub cache_write_per_million: f64,
+    #[serde(default)]
     pub cache_read_per_million: f64,
 }
 
-/// Returns approximate USD pricing per 1M tokens for known models.
-/// Supports substring matching so dated snapshots (e.g. claude-sonnet-4-5-20250929) resolve cleanly.
+#[derive(Debug, Deserialize)]
+struct PricingOverrideFile {
+    #[serde(default)]
+    models: HashMap<String, ModelPricing>,
+}
+
+/// Returns approximate USD pricing per 1M tokens for known models,
+/// checking optional `~/.agentbox/pricing.yaml` overrides first.
 pub fn pricing_for_model(model: &str) -> ModelPricing {
     let m = model.to_lowercase();
+
+    if let Ok(paths) = AgentBoxPaths::resolve() {
+        let custom_path = paths.home_dir.join("pricing.yaml");
+        if custom_path.exists() {
+            if let Ok(raw) = std::fs::read_to_string(&custom_path) {
+                if let Ok(parsed) = serde_yaml::from_str::<PricingOverrideFile>(&raw) {
+                    if let Some(exact) = parsed.models.get(model).or_else(|| parsed.models.get(&m)) {
+                        return *exact;
+                    }
+                    for (k, v) in &parsed.models {
+                        if m.contains(&k.to_lowercase()) {
+                            return *v;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if m.contains("opus") {
-        // Claude Opus 4 / 4.5 / 4.6 tier ($15 in / $75 out or $5/$25 for 4.5+ — use conservative $15/$75 or check 4-5)
         if m.contains("4-5") || m.contains("4.5") || m.contains("4-6") || m.contains("4.6") {
             ModelPricing {
                 input_per_million: 5.0,
@@ -56,7 +86,6 @@ pub fn pricing_for_model(model: &str) -> ModelPricing {
             cache_read_per_million: 0.31,
         }
     } else {
-        // Fallback default (Sonnet-equivalent)
         ModelPricing {
             input_per_million: 3.0,
             output_per_million: 15.0,

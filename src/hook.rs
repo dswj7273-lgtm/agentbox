@@ -276,8 +276,14 @@ fn enrich_session_from_transcript(
     now_s: i64,
 ) -> Result<()> {
     if let Some(ref tp) = event.transcript_path {
-        if tp.exists() && event.agent == "claude" {
-            if let Ok(metrics) = crate::adapter::claude::parse_claude_transcript(tp) {
+        if tp.exists() {
+            let parsed = match event.agent.as_str() {
+                "claude" => crate::adapter::claude::parse_claude_transcript(tp).ok(),
+                "codex" => crate::adapter::codex::parse_codex_transcript(tp).ok(),
+                "gemini" => crate::adapter::gemini::parse_gemini_transcript(tp).ok(),
+                _ => None,
+            };
+            if let Some(metrics) = parsed {
                 let cache_total = metrics.cache_write_tokens + metrics.cache_read_tokens;
                 db.finish_session(
                     &event.session_id,

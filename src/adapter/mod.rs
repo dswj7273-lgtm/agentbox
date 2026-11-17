@@ -1,4 +1,6 @@
 pub mod claude;
+pub mod codex;
+pub mod gemini;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -57,6 +59,7 @@ pub struct InstallReport {
     pub agent: String,
     pub config_path: PathBuf,
     pub backup_path: Option<PathBuf>,
+    pub post_install_note: Option<String>,
 }
 
 pub trait AgentAdapter {
@@ -77,10 +80,16 @@ pub trait AgentAdapter {
 pub fn get_adapter(name: &str) -> Option<Box<dyn AgentAdapter>> {
     match name {
         "claude" | "claude-code" => Some(Box::new(claude::ClaudeAdapter::new())),
+        "codex" | "codex-cli" => Some(Box::new(codex::CodexAdapter::new())),
+        "gemini" | "gemini-cli" => Some(Box::new(gemini::GeminiAdapter::new())),
         _ => None,
     }
 }
 
 pub fn all_adapters() -> Vec<Box<dyn AgentAdapter>> {
-    vec![Box::new(claude::ClaudeAdapter::new())]
+    vec![
+        Box::new(claude::ClaudeAdapter::new()),
+        Box::new(codex::CodexAdapter::new()),
+        Box::new(gemini::GeminiAdapter::new()),
+    ]
 }

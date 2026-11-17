@@ -2,8 +2,8 @@
 
 A local flight recorder, safety guard, and step-by-step undo tool for AI coding agents (Claude Code MVP).
 
-## Features Implemented (M0 + M1)
-- **`abox init [--project | --global]` / `abox uninstall [--purge]`**: Detects Claude Code, backs up `settings.json`, non-destructively merges `SessionStart`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, and `SessionEnd` hooks pointing directly to the native `abox` binary.
+## Features Implemented (M0 + M1 + P1 Multi-Agent)
+- **`abox init [--project | --global]` / `abox uninstall [--purge]`**: Detects **Claude Code**, **Codex CLI**, and **Gemini CLI**, backs up existing configs, and non-destructively merges hooks (`PreToolUse`/`PostToolUse`/`PostToolUseFailure` for Claude & Codex; `BeforeTool`/`AfterTool` for Gemini) pointing directly to the native `abox` binary.
 - **Shadow Git Snapshots**: Stores snapshots in `~/.agentbox/repos/<project-hash>` without touching your `.git`, index, or stash. Tracks **Bash / shell modifications** in addition to `Edit`/`Write`/`MultiEdit`, skips `node_modules`, `.aboxignore`, and files >20MB, and serializes concurrent writes via per-project file locks.
 - **`abox log` / `abox show <step>` / `abox diff <step|a..b>`**: Unified timeline, file-level audit, and unified diffs.
 - **`abox undo [<step>] [--to <step>] [--only <path>] [--force]`**: Restores files (including deleted files from Bash `rm -rf`), detects manual out-of-band modifications before overwriting, and creates a revertible undo snapshot before restoring.

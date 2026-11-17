@@ -51,14 +51,17 @@ pub fn cmd_init(project_scope: bool, global_scope: bool) -> Result<()> {
             } else {
                 println!("✔ Hooks installed → {}", report.config_path.display());
             }
+            if let Some(note) = report.post_install_note {
+                println!("  ℹ {}", note);
+            }
         }
     }
 
     if !installed_any {
-        println!("⚠ No supported agent CLI detected (~/.claude not found).");
+        println!("⚠ No supported agent CLI detected (~/.claude, ~/.codex, ~/.gemini not found).");
         println!("  Creating Claude Code hooks anyway at target scope...");
-        for adapter in &adapters {
-            let report = adapter.install_hooks(scope, &project_root, &abox_bin)?;
+        if let Some(claude) = adapters.first() {
+            let report = claude.install_hooks(scope, &project_root, &abox_bin)?;
             println!("✔ Hooks installed → {}", report.config_path.display());
         }
     }
@@ -499,17 +502,17 @@ pub fn cmd_cost(by: &str, all: bool) -> Result<()> {
     }
 
     println!(
-        " {:<28} {:>8} {:>7} {:>12} {:>9}",
+        " {:<28} {:>8} {:>7} {:>12} {:>15}",
         by.to_uppercase(),
         "SESSIONS",
         "STEPS",
         "TOKENS",
-        "EST. COST"
+        "API EQUIV. ($)"
     );
     for r in rows {
         let tot = r.input_tokens + r.output_tokens + r.cache_tokens;
         println!(
-            " {:<28} {:>8} {:>7} {:>12} ${:>8.2}",
+            " {:<28} {:>8} {:>7} {:>12} ${:>14.2}",
             pad_or_truncate(&r.key, 28),
             r.sessions,
             r.steps,
@@ -517,6 +520,7 @@ pub fn cmd_cost(by: &str, all: bool) -> Result<()> {
             r.cost_usd
         );
     }
+    println!("\nNote: Costs reflect estimated API-equivalent value (subscription plans may vary).");
     Ok(())
 }
 
